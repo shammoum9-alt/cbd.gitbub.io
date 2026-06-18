@@ -1,15 +1,15 @@
 {
   "files": {
     "main.css": "/cbd.gitbub.io/static/css/main.e6c13ad2.css",
-    "main.js": "/cbd.gitbub.io/static/js/main.44f71097.js",
+    "main.js": "/cbd.gitbub.io/static/js/main.bad886bd.js",
     "static/js/453.6fb80d31.chunk.js": "/cbd.gitbub.io/static/js/453.6fb80d31.chunk.js",
     "index.html": "/cbd.gitbub.io/index.html",
     "main.e6c13ad2.css.map": "/cbd.gitbub.io/static/css/main.e6c13ad2.css.map",
-    "main.44f71097.js.map": "/cbd.gitbub.io/static/js/main.44f71097.js.map",
+    "main.bad886bd.js.map": "/cbd.gitbub.io/static/js/main.bad886bd.js.map",
     "453.6fb80d31.chunk.js.map": "/cbd.gitbub.io/static/js/453.6fb80d31.chunk.js.map"
   },
   "entrypoints": [
     "static/css/main.e6c13ad2.css",
-    "static/js/main.44f71097.js"
+    "static/js/main.bad886bd.js"
   ]
 }
