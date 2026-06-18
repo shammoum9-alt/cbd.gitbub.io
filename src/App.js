@@ -321,7 +321,7 @@ export default function App() {
     <div style={{fontFamily:"var(--font-sans)",maxWidth:900,margin:"0 auto",padding:"0 0 3rem"}}>
       <div style={{background:"var(--color-background-primary)",borderBottom:"0.5px solid var(--color-border-tertiary)",padding:"1rem 1rem 0",position:"sticky",top:0,zIndex:10}}>
         <div style={{display:"flex",alignItems:"center",gap:"0.5rem",marginBottom:"0.75rem"}}>
-          <span style={{fontSize:20,fontWeight:500,color:"var(--color-text-primary)"}}>☕ Sam</span>
+          <span style={{fontSize:20,fontWeight:500,color:"var(--color-text-primary)"}}>☕</span>
           <span style={{fontSize:13,color:"var(--color-text-secondary)",marginLeft:4}}>Café & CBD</span>
           <SyncStatus/>
         </div>
@@ -382,6 +382,7 @@ function Caisse({produits, cbcData, onAdd, ventes, onDelete: deleteVente, onRemb
   const fermetureToday = journalCaisse.filter(e=>e.type==="fermeture" && e.date===todayStr).slice(-1)[0]||null;
 
   // Première visite du jour sans ouverture → proposer ouverture
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   React.useEffect(()=>{
     if(!ouvertureToday) setShowOuverture(true);
   },[todayStr]);
@@ -417,13 +418,6 @@ function Caisse({produits, cbcData, onAdd, ventes, onDelete: deleteVente, onRemb
   const ventesOrdonnees = [...ventesAujourdhui].sort((a,b)=>new Date(a.date)-new Date(b.date));
   const premiereVente = ventesOrdonnees[0];
   const derniereVente = ventesOrdonnees[ventesOrdonnees.length-1];
-
-  const diffMin = (dateA, heureB) => {
-    if(!dateA || !heureB) return null;
-    const [h,m] = heureB.split(":").map(Number);
-    const ref = new Date(dateA); ref.setHours(h,m,0,0);
-    return Math.round((new Date(dateA)-ref)/60000);
-  };
 
   // ── Ouverture caisse ──
   const confirmerOuverture = () => {
