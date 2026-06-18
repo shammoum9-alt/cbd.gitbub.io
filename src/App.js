@@ -224,7 +224,20 @@ export default function App() {
         return merged;
       });
       // Config : on prend remote seulement si local est vide
-      setNbres(current => remote.nbres && Object.keys(current).length===0 ? remote.nbres : current);
+      // nbres : remote prioritaire sauf si l'utilisateur a modifié localement
+      // On détecte si c'est encore les valeurs par défaut (toutes identiques aux init)
+      if(remote.nbres) setNbres(current => {
+        const defaults = {};
+        current && Object.keys(current).forEach(id => {
+          // Valeurs par défaut : sam=50, sandwich=30, boisson=40, autres=30
+          const prod = PRODUITS.find(p=>p.id===id);
+          defaults[id] = prod ? (prod.categorie==="sam"?50:prod.categorie==="sandwich"?30:prod.categorie==="boisson"?40:30) : 30;
+        });
+        const isDefault = Object.keys(current||{}).every(id=>current[id]===defaults[id]);
+        // Si local = valeurs par défaut → prendre remote (l'autre device a personnalisé)
+        // Sinon → garder local (priorité à ce qu'on a saisi ici)
+        return isDefault ? remote.nbres : current;
+      });
       setParams(current => remote.params ? remote.params : current);
       // Merge journal caisse : union par id
       if(remote.journalCaisse?.length) setJournalCaisse(current => {
@@ -1285,7 +1298,7 @@ function Planif({produits, nbres, setNbres, achats, setAchats, setCourses, vente
       montant: totalReel.toFixed(2),
       mois: new Date().getMonth()
     }]);
-    saveRemote({action:"save_achats", achats: nouveauxAchats});
+    // save_all dans le useEffect [achats,...] se déclenche automatiquement
     // Reset
     setCoursesSession(prev=>{
       const next={};
