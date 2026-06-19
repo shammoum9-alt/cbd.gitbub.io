@@ -1,5 +1,5 @@
+import "./styles/layout.css";
 import React, { useState, useCallback } from "react";
-
 import Header from "./components/header";
 import Caisse from "./components/caisse";
 import Dashboard from "./components/dashboard";
@@ -148,10 +148,9 @@ export default function App() {
   return (
     <div>
       <Header tab={tab} setTab={setTab} tabs={tabs} />
-
-      <div style={{ padding: "1.5rem" }}>
-        <Page {...sharedProps} />
-      </div>
+        <div className="page-container">
+          <Page {...sharedProps} />
+        </div>
     </div>
   );
 }

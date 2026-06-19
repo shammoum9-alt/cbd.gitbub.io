@@ -2,49 +2,93 @@ import React from "react";
 
 export default function Header({ tab, setTab, tabs }) {
   return (
-    <div
+    <header
       style={{
-        background: "var(--color-background-primary)",
-        borderBottom: "0.5px solid var(--color-border-tertiary)",
-        padding: "1rem",
+        background: "#f3f4f6",
+        borderBottom: "1px solid #dcdfe4",
+        padding: "1rem 1.5rem",
         position: "sticky",
         top: 0,
-        zIndex: 10,
+        zIndex: 100,
+        backdropFilter: "blur(10px)",
       }}
     >
-      {/* TITLE */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-        <span style={{ fontSize: 20, fontWeight: 500 }}>☕ Sam</span>
-        <span style={{ fontSize: 13, opacity: 0.7 }}>Café & CBD</span>
-      </div>
-
-      {/* TABS */}
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-        {tabs.map((t) => (
-          <button
-            key={t.id}
-            onClick={() => setTab(t.id)}
+      <div
+        style={{
+          maxWidth: 1600,
+          margin: "0 auto",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            alignItems: "baseline",
+            gap: 10,
+            marginBottom: 14,
+          }}
+        >
+          <span
             style={{
-              border: "none",
-              padding: "6px 12px",
-              borderRadius: 8,
-              cursor: "pointer",
-              fontSize: 13,
-              background: tab === t.id
-                ? "var(--color-background-secondary)"
-                : "transparent",
-              color: tab === t.id
-                ? "var(--color-text-primary)"
-                : "var(--color-text-secondary)",
-              borderBottom: tab === t.id
-                ? "2px solid var(--color-text-primary)"
-                : "2px solid transparent",
+              fontSize: 22,
+              fontWeight: 600,
+              letterSpacing: "-0.5px",
             }}
           >
-            {t.label}
-          </button>
-        ))}
+            ☕ Sam
+          </span>
+
+          <span
+            style={{
+              fontSize: 13,
+              color: "#6b7280",
+            }}
+          >
+            Café & CBD
+          </span>
+        </div>
+
+        <div
+          style={{
+            display: "flex",
+            gap: 8,
+            flexWrap: "wrap",
+          }}
+        >
+          {tabs.map((t) => {
+            const active = tab === t.id;
+
+            return (
+              <button
+                key={t.id}
+                onClick={() => setTab(t.id)}
+                style={{
+                  border: "none",
+                  cursor: "pointer",
+                  padding: "8px 14px",
+                  borderRadius: 10,
+                  fontSize: 13,
+                  fontWeight: active ? 600 : 500,
+                  transition: "all .15s ease",
+
+                  background: active
+                    ? "#ffffff"
+                    : "transparent",
+
+                  color: active
+                    ? "#111827"
+                    : "#6b7280",
+
+                  boxShadow: active
+                    ? "0 1px 3px rgba(0,0,0,0.08)"
+                    : "none",
+                }}
+              >
+                {t.label}
+              </button>
+            );
+          })}
+        </div>
       </div>
-    </div>
+    </header>
   );
 }
