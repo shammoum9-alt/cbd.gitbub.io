@@ -97,7 +97,6 @@ const defaultParams = {
   ]
 };
 
-// localStorage
 const loadLocal = () => {
   try { const r = localStorage.getItem("sam_data"); return r ? JSON.parse(r) : null; } catch(e){ return null; }
 };
@@ -105,13 +104,9 @@ const saveLocal = (data) => {
   try { localStorage.setItem("sam_data", JSON.stringify(data)); } catch(e){}
 };
 
-// Google Sheets
 const loadRemote = async () => {
   try {
-    const r = await fetch(GOOGLE_URL + "?t=" + Date.now(), {
-      method: "GET",
-      cache: "no-store"
-    });
+    const r = await fetch(GOOGLE_URL + "?t=" + Date.now(), { method: "GET", cache: "no-store" });
     if(!r.ok) return null;
     const d = await r.json();
     return (d && d.status !== "error") ? d : null;
@@ -119,27 +114,15 @@ const loadRemote = async () => {
 };
 const saveRemote = (data) => {
   try {
-    // Si action spécifique (save_journee_event), on envoie tel quel
-    // Sinon on enveloppe dans save_all
-    const payload = data.action
-      ? JSON.stringify(data)
-      : JSON.stringify({action:"save_all", ...data});
-    fetch(GOOGLE_URL, {
-      method: "POST",
-      mode: "no-cors",
-      headers: { "Content-Type": "text/plain" },
-      body: payload
-    });
+    const payload = data.action ? JSON.stringify(data) : JSON.stringify({action:"save_all", ...data});
+    fetch(GOOGLE_URL, { method: "POST", mode: "no-cors", headers: { "Content-Type": "text/plain" }, body: payload });
   } catch(e){}
 };
 
-// Merge deux listes de ventes : union par id, pas d'écrasement
 const mergeVentes = (local=[], remote=[]) => {
   const map = {};
-  // Remote d'abord, local écrase (local est plus récent)
   remote.forEach(v => { if(v?.id) map[v.id] = v; });
   local.forEach(v => { if(v?.id) map[v.id] = v; });
-  // deleted et rembourse : si présent sur l'une → gagne
   Object.keys(map).forEach(id => {
     const l = local.find(v=>String(v.id)===String(id));
     const r = remote.find(v=>String(v.id)===String(id));
@@ -189,8 +172,8 @@ export default function App() {
   const [params, setParams] = useState(defaultParams);
   const [courses, setCourses] = useState([]);
   const [journalCaisse, setJournalCaisse] = useState([]);
-  const [achats, setAchats] = useState([]); // historique vrais prix d'achat ingrédients
-  const [achatsCBC, setAchatsCBC] = useState([]); // historique vrais prix CBC/CBD (union par id, partagé)
+  const [achats, setAchats] = useState([]);
+  const [achatsCBC, setAchatsCBC] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [nbres, setNbres] = useState(()=>{
     const d={};
@@ -198,7 +181,6 @@ export default function App() {
     return d;
   });
 
-  // Ref pour accéder aux ventes courantes dans le merge sans recréer l'effect
   const ventesRef = useRef([]);
   useEffect(()=>{ ventesRef.current = ventes; },[ventes]);
   const paramsModifiedAtRef = useRef(0);
@@ -207,7 +189,6 @@ export default function App() {
   useEffect(()=>{ produitsModifiedAtRef.current = produitsModifiedAt; },[produitsModifiedAt]);
 
   useEffect(()=>{
-    // 1. Charge localStorage immédiatement
     const local = loadLocal();
     if(local){
       if(local.ventes?.length) setVentes(local.ventes);
@@ -224,58 +205,41 @@ export default function App() {
     }
     setLoaded(true);
 
-    // Merge intelligent : on fusionne les ventes sans écraser
     const syncRemote = async () => {
       const remote = await loadRemote();
       if(!remote) return;
-      // Ventes : merge union (jamais d'écrasement)
-      setVentes(current => {
-        const merged = mergeVentes(current, remote.ventes||[]);
-        return merged;
-      });
-      // Config : on prend remote seulement si local est vide
-      // nbres : remote prioritaire sauf si l'utilisateur a modifié localement
-      // On détecte si c'est encore les valeurs par défaut (toutes identiques aux init)
+      setVentes(current => mergeVentes(current, remote.ventes||[]));
       if(remote.nbres) setNbres(current => {
         const defaults = {};
         current && Object.keys(current).forEach(id => {
-          // Valeurs par défaut : sam=50, sandwich=30, boisson=40, autres=30
           const prod = PRODUITS.find(p=>p.id===id);
           defaults[id] = prod ? (prod.categorie==="sam"?50:prod.categorie==="sandwich"?30:prod.categorie==="boisson"?40:30) : 30;
         });
         const isDefault = Object.keys(current||{}).every(id=>current[id]===defaults[id]);
-        // Si local = valeurs par défaut → prendre remote (l'autre device a personnalisé)
-        // Sinon → garder local (priorité à ce qu'on a saisi ici)
         return isDefault ? remote.nbres : current;
       });
-      // Merge params : le plus récent gagne, basé sur timestamp (refs pour lecture sûre)
       if(remote.params && remote.paramsModifiedAt > paramsModifiedAtRef.current){
         setParams(remote.params);
         setParamsModifiedAt(remote.paramsModifiedAt);
       } else if(remote.params && !remote.paramsModifiedAt && !paramsModifiedAtRef.current){
-        // Compat : remote sans timestamp et jamais modifié localement
         setParams(remote.params);
       }
-      // Merge produits (recettes/prix) : le plus récent gagne, basé sur timestamp
       if(remote.produits?.length && remote.produitsModifiedAt > produitsModifiedAtRef.current){
         setProduits(remote.produits);
         setProduitsModifiedAt(remote.produitsModifiedAt);
       }
-      // Merge journal caisse : union par id
       if(remote.journalCaisse?.length) setJournalCaisse(current => {
         const map = {};
         current.forEach(e => { if(e?.id) map[e.id] = e; });
         remote.journalCaisse.forEach(e => { if(e?.id) map[e.id] = e; });
         return Object.values(map).sort((a,b) => a.id - b.id);
       });
-      // Merge achats
       if(remote.achats?.length) setAchats(current => {
         const map = {};
         current.forEach(a => { if(a?.id) map[a.id] = a; });
         remote.achats.forEach(a => { if(a?.id) map[a.id] = a; });
         return Object.values(map).sort((a,b) => a.id - b.id);
       });
-      // Merge achatsCBC : union par id (même logique que achats)
       if(remote.achatsCBC?.length) setAchatsCBC(current => {
         const map = {};
         current.forEach(a => { if(a?.id) map[a.id] = a; });
@@ -293,15 +257,10 @@ export default function App() {
 
     syncRemote();
 
-    // 2. Resync au focus et visibilitychange
-    const onVisible = () => {
-      if(document.visibilityState==="visible") syncRemote();
-    };
+    const onVisible = () => { if(document.visibilityState==="visible") syncRemote(); };
     const onFocus = () => syncRemote();
     document.addEventListener("visibilitychange", onVisible);
     window.addEventListener("focus", onFocus);
-
-    // 3. Polling toutes les 20s
     const interval = setInterval(syncRemote, 20000);
 
     return () => {
@@ -314,34 +273,21 @@ export default function App() {
   useEffect(()=>{
     if(!loaded) return;
     const data = {ventes, produits, cbcData, params, nbres, courses, journalCaisse, achats, achatsCBC, produitsModifiedAt, paramsModifiedAt};
-    saveLocal(data);      // immédiat
-    saveRemote(data);     // async Google Sheets
+    saveLocal(data);
+    saveRemote(data);
   },[ventes, produits, cbcData, params, nbres, courses, journalCaisse, achats, achatsCBC, produitsModifiedAt, paramsModifiedAt, loaded]);
 
   const addVente = useCallback((v)=>{ setVentes(prev=>[...prev, {...v, id:Date.now(), date:new Date().toISOString()}]); },[]);
-  const deleteVente = useCallback((id)=>{
-    setVentes(prev=>prev.map(v=>v.id===id ? {...v, deleted:true} : v));
-  },[]);
+  const deleteVente = useCallback((id)=>{ setVentes(prev=>prev.map(v=>v.id===id ? {...v, deleted:true} : v)); },[]);
   const addJournalEvent = useCallback((event) => {
     const newEvent = {...event, id: Date.now()};
     setJournalCaisse(prev => [...prev, newEvent]);
-    // Envoi immédiat à Google Sheets (sans attendre le useEffect de 20s)
     saveRemote({action:"save_journee_event", event: newEvent});
   },[]);
+  const rembourserVente = useCallback((id)=>{ setVentes(prev=>prev.map(v=>v.id===id ? {...v, rembourse:true} : v)); },[]);
 
-  const rembourserVente = useCallback((id)=>{
-    setVentes(prev=>prev.map(v=>v.id===id ? {...v, rembourse:true} : v));
-  },[]);
-
-  // Wrappers qui marquent le timestamp de modification pour la sync multi-device
-  const setProduitsTracked = useCallback((updater)=>{
-    setProduits(updater);
-    setProduitsModifiedAt(Date.now());
-  },[]);
-  const setParamsTracked = useCallback((updater)=>{
-    setParams(updater);
-    setParamsModifiedAt(Date.now());
-  },[]);
+  const setProduitsTracked = useCallback((updater)=>{ setProduits(updater); setProduitsModifiedAt(Date.now()); },[]);
+  const setParamsTracked = useCallback((updater)=>{ setParams(updater); setParamsModifiedAt(Date.now()); },[]);
 
   const tabs = [
     {id:"caisse", label:"Caisse", icon:"ti-cash"},
@@ -358,7 +304,13 @@ export default function App() {
 
   return (
     <div style={{fontFamily:"var(--font-sans)",maxWidth:900,margin:"0 auto",padding:"0 0 3rem"}}>
-      <div style={{background:"var(--color-background-primary)",borderBottom:"0.5px solid var(--color-border-tertiary)",padding:"1rem 1rem 0",position:"sticky",top:0,zIndex:10}}>
+      <div style={{
+        background:"var(--color-background-primary)",
+        borderBottom:"0.5px solid var(--color-border-tertiary)",
+        padding:"1rem 1rem 0",
+        position:"sticky",top:0,zIndex:10,
+        boxShadow:"0 2px 10px rgba(0,0,0,0.06)"
+      }}>
         <div style={{display:"flex",alignItems:"center",gap:"0.5rem",marginBottom:"0.75rem"}}>
           <span style={{fontSize:20,fontWeight:500,color:"var(--color-text-primary)"}}>☕ Cateh</span>
           <span style={{fontSize:13,color:"var(--color-text-secondary)",marginLeft:4}}>Café & CBD</span>
@@ -396,37 +348,29 @@ export default function App() {
 function Caisse({produits, cbcData, achatsCBC, onAdd, ventes, onDelete: deleteVente, onRembourser, journalCaisse, addJournalEvent}){
   const todayStr = new Date().toISOString().slice(0,10);
 
-  // ── États saisie vente ──
   const [lignes, setLignes] = useState([{produit:"",qte:1}]);
   const [paiement, setPaiement] = useState("CB");
   const [espece_donnee, setEspeceDonnee] = useState("");
   const [nomClient, setNomClient] = useState("");
   const [saved, setSaved] = useState(false);
 
-  // ── Modals ──
   const [showFacture, setShowFacture] = useState(null);
   const [editVente, setEditVente] = useState(null);
   const [showOuverture, setShowOuverture] = useState(false);
   const [showFermeture, setShowFermeture] = useState(false);
 
-  // ── Ouverture ──
   const [dateOuverture, setDateOuverture] = useState(todayStr);
   const [fondOuvertureSaisie, setFondOuvertureSaisie] = useState("");
-
-  // ── Fermeture ──
   const [fondFermetureSaisie, setFondFermetureSaisie] = useState("");
 
-  // Trouver l'ouverture et fermeture du jour sélectionné
   const ouvertureToday = journalCaisse.filter(e=>e.type==="ouverture" && e.date===todayStr).slice(-1)[0]||null;
   const fermetureToday = journalCaisse.filter(e=>e.type==="fermeture" && e.date===todayStr).slice(-1)[0]||null;
 
-  // Première visite du jour sans ouverture → proposer ouverture
   // eslint-disable-next-line react-hooks/exhaustive-deps
   React.useEffect(()=>{
     if(!ouvertureToday) setShowOuverture(true);
   },[todayStr]);
 
-  // ── Helpers ──
   const getPrix = (id) => {
     const p = produits.find(x=>x.id===id);
     if(p) return p.prix||0;
@@ -437,7 +381,6 @@ function Caisse({produits, cbcData, achatsCBC, onAdd, ventes, onDelete: deleteVe
   };
   const getNom  = (id) => { const p=produits.find(x=>x.id===id)||(cbcData||[]).find(x=>x.id===id); return p?.nom||id; };
 
-  // ── Calculs vente ──
   const total = lignes.reduce((s,l)=> s + getPrix(l.produit)*l.qte, 0);
   const monnaie = paiement==="Espèce" && espece_donnee ? parseFloat(espece_donnee)-total : null;
 
@@ -453,19 +396,16 @@ function Caisse({produits, cbcData, achatsCBC, onAdd, ventes, onDelete: deleteVe
     setSaved(true); setTimeout(()=>setSaved(false),1800);
   };
 
-  // ── KPIs jour ──
   const ventesAujourdhui = ventes.filter(v=>!v.deleted&&v.date&&v.date.startsWith(todayStr));
   const caJour    = ventesAujourdhui.filter(v=>!v.rembourse).reduce((s,v)=>s+v.total,0);
   const caCB      = ventesAujourdhui.filter(v=>!v.rembourse&&v.paiement==="CB").reduce((s,v)=>s+v.total,0);
   const caEspece  = ventesAujourdhui.filter(v=>!v.rembourse&&v.paiement==="Espèce").reduce((s,v)=>s+v.total,0);
   const nbJour    = ventesAujourdhui.filter(v=>!v.rembourse).length;
 
-  // Première et dernière vente du jour (pour calcul délai)
   const ventesOrdonnees = [...ventesAujourdhui].sort((a,b)=>new Date(a.date)-new Date(b.date));
   const premiereVente = ventesOrdonnees[0];
   const derniereVente = ventesOrdonnees[ventesOrdonnees.length-1];
 
-  // ── Ouverture caisse ──
   const confirmerOuverture = () => {
     const fond = parseFloat(fondOuvertureSaisie)||0;
     const heure = new Date().toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit"});
@@ -473,7 +413,6 @@ function Caisse({produits, cbcData, achatsCBC, onAdd, ventes, onDelete: deleteVe
     setShowOuverture(false); setFondOuvertureSaisie("");
   };
 
-  // ── Fermeture caisse ──
   const fondOuv = ouvertureToday?.fond||0;
   const theorique = fondOuv + caEspece;
   const fondFerm = parseFloat(fondFermetureSaisie)||0;
@@ -485,7 +424,6 @@ function Caisse({produits, cbcData, achatsCBC, onAdd, ventes, onDelete: deleteVe
     setShowFermeture(false); setFondFermetureSaisie("");
   };
 
-  // ── Export CSV ──
   const exportCSV = () => {
     const rows = [["Date","Heure","Client","Produits","Total","Paiement","Remboursé"]];
     ventes.filter(v=>!v.deleted).forEach(v=>{
@@ -530,22 +468,18 @@ function Caisse({produits, cbcData, achatsCBC, onAdd, ventes, onDelete: deleteVe
 
   return (
     <div>
-      {/* ══ MODAL OUVERTURE ══ */}
       {showOuverture&&(
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:"1rem"}}>
           <div style={{background:"#ffffff",color:"#111",borderRadius:"var(--border-radius-lg)",padding:"2rem",maxWidth:380,width:"100%",boxShadow:"0 8px 40px rgba(0,0,0,0.2)"}}>
             <div style={{fontSize:20,fontWeight:600,marginBottom:4}}>☀️ Ouverture de caisse</div>
             <div style={{fontSize:13,color:"#666",marginBottom:"1.5rem"}}>Saisissez le fond de départ</div>
-
             <label style={{fontSize:12,color:"#555",display:"block",marginBottom:4}}>Date d'ouverture</label>
             <input type="date" value={dateOuverture} onChange={e=>setDateOuverture(e.target.value)}
               style={{width:"100%",padding:"8px 10px",fontSize:14,border:"1px solid #ddd",borderRadius:8,marginBottom:12,color:"#111",background:"#fafafa"}}/>
-
             <label style={{fontSize:12,color:"#555",display:"block",marginBottom:4}}>Fond de caisse (€)</label>
             <input type="number" step="0.50" min="0" placeholder="Ex: 150.00" value={fondOuvertureSaisie}
               onChange={e=>setFondOuvertureSaisie(e.target.value)} autoFocus
               style={{width:"100%",padding:"10px 12px",fontSize:18,border:"1px solid #ddd",borderRadius:8,marginBottom:16,color:"#111",background:"#fafafa"}}/>
-
             <button onClick={confirmerOuverture}
               style={{width:"100%",padding:"12px",background:"#111",color:"#fff",border:"none",borderRadius:8,cursor:"pointer",fontSize:15,fontWeight:600,marginBottom:8}}>
               Ouvrir la caisse
@@ -558,12 +492,10 @@ function Caisse({produits, cbcData, achatsCBC, onAdd, ventes, onDelete: deleteVe
         </div>
       )}
 
-      {/* ══ MODAL FERMETURE ══ */}
       {showFermeture&&(
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:"1rem"}} onClick={()=>setShowFermeture(false)}>
           <div style={{background:"#ffffff",color:"#111",borderRadius:"var(--border-radius-lg)",padding:"2rem",maxWidth:440,width:"100%",boxShadow:"0 8px 40px rgba(0,0,0,0.2)"}} onClick={e=>e.stopPropagation()}>
             <div style={{fontSize:20,fontWeight:600,marginBottom:"1.5rem"}}>🌙 Fermeture de caisse</div>
-
             <div style={{background:"#f8f8f8",borderRadius:8,padding:"1rem",marginBottom:"1.5rem",fontSize:13}}>
               <div style={{display:"grid",gridTemplateColumns:"1fr auto",gap:"6px 0"}}>
                 {[
@@ -584,12 +516,10 @@ function Caisse({produits, cbcData, achatsCBC, onAdd, ventes, onDelete: deleteVe
                 ))}
               </div>
             </div>
-
             <label style={{fontSize:12,color:"#555",display:"block",marginBottom:4}}>Fond compté réel (€)</label>
             <input type="number" step="0.50" min="0" placeholder="Montant en caisse" value={fondFermetureSaisie}
               onChange={e=>setFondFermetureSaisie(e.target.value)} autoFocus
               style={{width:"100%",padding:"10px 12px",fontSize:18,border:"1px solid #ddd",borderRadius:8,marginBottom:12,color:"#111",background:"#fafafa"}}/>
-
             {ecart!==null&&(
               <div style={{
                 padding:"10px 14px",borderRadius:8,marginBottom:12,fontWeight:600,fontSize:15,
@@ -601,7 +531,6 @@ function Caisse({produits, cbcData, achatsCBC, onAdd, ventes, onDelete: deleteVe
                 <span>{ecart>0?"+":""}{fmtE(ecart)} {Math.abs(ecart)<0.5?"✓":ecart>0?"(excédent)":"(manquant)"}</span>
               </div>
             )}
-
             <button onClick={confirmerFermeture} disabled={!fondFermetureSaisie}
               style={{width:"100%",padding:"12px",background:fondFermetureSaisie?"#111":"#ccc",color:"#fff",border:"none",borderRadius:8,cursor:fondFermetureSaisie?"pointer":"default",fontSize:15,fontWeight:600,marginBottom:8}}>
               Clôturer la journée
@@ -614,7 +543,6 @@ function Caisse({produits, cbcData, achatsCBC, onAdd, ventes, onDelete: deleteVe
         </div>
       )}
 
-      {/* ══ BANDEAU ÉTAT CAISSE ══ */}
       <div style={{background:"var(--color-background-secondary)",borderRadius:"var(--border-radius-md)",padding:"10px 14px",marginBottom:"1rem",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
         <div style={{fontSize:13}}>
           {ouvertureToday ? (
@@ -633,7 +561,6 @@ function Caisse({produits, cbcData, achatsCBC, onAdd, ventes, onDelete: deleteVe
         </div>
       </div>
 
-      {/* ══ KPIs ══ */}
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(110px,1fr))",gap:10,marginBottom:"1.5rem"}}>
         {[
           {label:"CA aujourd'hui",val:fmtE(caJour)},
@@ -649,16 +576,13 @@ function Caisse({produits, cbcData, achatsCBC, onAdd, ventes, onDelete: deleteVe
         ))}
       </div>
 
-      {/* ══ FORMULAIRE NOUVELLE VENTE ══ */}
       <div style={{background:"var(--color-background-primary)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-lg)",padding:"1.25rem",marginBottom:"1.5rem"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"1rem"}}>
           <div style={{fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:1}}>Nouvelle vente</div>
           <button onClick={exportCSV} style={btnSt()}>Export CSV</button>
         </div>
-
         <input placeholder="Nom client (facultatif)" value={nomClient} onChange={e=>setNomClient(e.target.value)}
           style={{width:"100%",padding:"6px 10px",border:"0.5px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",background:"var(--color-background-primary)",color:"var(--color-text-primary)",fontSize:13,marginBottom:10}}/>
-
         {lignes.map((l,i)=>(
           <div key={i} style={{display:"flex",gap:8,marginBottom:8,alignItems:"center"}}>
             <Dropdown value={l.produit} onChange={v=>updateLigne(i,"produit",v)}/>
@@ -669,15 +593,13 @@ function Caisse({produits, cbcData, achatsCBC, onAdd, ventes, onDelete: deleteVe
             </span>
             <button onClick={()=>removeLigne(i)} disabled={lignes.length===1}
               style={{...btnSt("danger"),opacity:lignes.length===1?0.3:1,padding:"5px 8px"}}>
-              
+              ✕
             </button>
           </div>
         ))}
-
         <button onClick={addLigne} style={{fontSize:13,color:"var(--color-text-secondary)",background:"none",border:"0.5px dashed var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",padding:"6px 14px",cursor:"pointer",marginBottom:"1rem",width:"100%"}}>
-           Ajouter un produit
+          + Ajouter un produit
         </button>
-
         <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:"0.75rem",flexWrap:"wrap"}}>
           <select value={paiement} onChange={e=>{setPaiement(e.target.value);setEspeceDonnee("");}}
             style={{padding:"6px 10px",borderRadius:"var(--border-radius-md)",border:"0.5px solid var(--color-border-tertiary)",background:"var(--color-background-primary)",color:"var(--color-text-primary)",fontSize:14}}>
@@ -697,7 +619,6 @@ function Caisse({produits, cbcData, achatsCBC, onAdd, ventes, onDelete: deleteVe
           )}
           <span style={{marginLeft:"auto",fontSize:18,fontWeight:500}}>{fmtE(total)}</span>
         </div>
-
         <button onClick={valider} disabled={!lignes.some(l=>l.produit)||(paiement==="Espèce"&&monnaie!==null&&monnaie<0)} style={{
           width:"100%",padding:"10px",borderRadius:"var(--border-radius-md)",
           background:saved?"var(--color-background-success)":lignes.some(l=>l.produit)&&!(paiement==="Espèce"&&monnaie!==null&&monnaie<0)?"var(--color-text-primary)":"var(--color-background-secondary)",
@@ -708,7 +629,6 @@ function Caisse({produits, cbcData, achatsCBC, onAdd, ventes, onDelete: deleteVe
         </button>
       </div>
 
-      {/* ══ HISTORIQUE DU JOUR ══ */}
       {ventesAujourdhui.length>0&&(
         <div>
           <div style={{fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:1,marginBottom:"0.75rem"}}>
@@ -745,13 +665,12 @@ function Caisse({produits, cbcData, achatsCBC, onAdd, ventes, onDelete: deleteVe
         </div>
       )}
 
-      {/* ══ MODAL ÉDITION VENTE ══ */}
       {editVente&&(
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",zIndex:100,display:"flex",alignItems:"center",justifyContent:"center",padding:"1rem"}} onClick={()=>setEditVente(null)}>
           <div style={{background:"#ffffff",color:"#111",borderRadius:"var(--border-radius-lg)",padding:"1.5rem",maxWidth:480,width:"100%",maxHeight:"90vh",overflowY:"auto",boxShadow:"0 8px 40px rgba(0,0,0,0.18)"}} onClick={e=>e.stopPropagation()}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"1rem"}}>
               <span style={{fontSize:15,fontWeight:600,color:"#111"}}>Modifier la vente</span>
-              <button onClick={()=>setEditVente(null)} style={{background:"none",border:"none",cursor:"pointer",fontSize:18,color:"#888"}}></button>
+              <button onClick={()=>setEditVente(null)} style={{background:"none",border:"none",cursor:"pointer",fontSize:18,color:"#888"}}>✕</button>
             </div>
             <input placeholder="Nom client (facultatif)" value={editVente.nomClient||""} onChange={e=>setEditVente({...editVente,nomClient:e.target.value})}
               style={{width:"100%",padding:"6px 10px",border:"1px solid #ddd",borderRadius:8,fontSize:13,marginBottom:10,color:"#111",background:"#fafafa"}}/>
@@ -766,7 +685,7 @@ function Caisse({produits, cbcData, achatsCBC, onAdd, ventes, onDelete: deleteVe
                   if(reste.length===0){if(window.confirm("Rembourser la vente ?")){ onRembourser(editVente.id); setEditVente(null);} return;}
                   setEditVente({...editVente,items:reste});
                 }} style={{background:"rgba(220,53,69,0.08)",border:"1px solid rgba(220,53,69,0.3)",cursor:"pointer",color:"#dc3545",fontSize:13,padding:"4px 8px",borderRadius:6}}>
-                  
+                  ✕
                 </button>
               </div>
             ))}
@@ -791,13 +710,12 @@ function Caisse({produits, cbcData, achatsCBC, onAdd, ventes, onDelete: deleteVe
         </div>
       )}
 
-      {/* ══ MODAL FACTURE ══ */}
       {showFacture&&(
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",zIndex:100,display:"flex",alignItems:"center",justifyContent:"center",padding:"1rem"}} onClick={()=>setShowFacture(null)}>
           <div style={{background:"#ffffff",color:"#111",borderRadius:"var(--border-radius-lg)",padding:"2rem",maxWidth:420,width:"100%",maxHeight:"90vh",overflowY:"auto",boxShadow:"0 8px 40px rgba(0,0,0,0.18)"}} onClick={e=>e.stopPropagation()}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"1.5rem"}}>
               <div><div style={{fontSize:16,fontWeight:600,color:"#111"}}>Facture / Reçu</div><div style={{fontSize:12,color:"#666"}}>SAM — Café & CBD</div></div>
-              <button onClick={()=>setShowFacture(null)} style={{background:"none",border:"none",cursor:"pointer",fontSize:18,color:"#888"}}></button>
+              <button onClick={()=>setShowFacture(null)} style={{background:"none",border:"none",cursor:"pointer",fontSize:18,color:"#888"}}>✕</button>
             </div>
             <div style={{fontSize:12,color:"#666",marginBottom:"1rem",paddingBottom:"1rem",borderBottom:"1px solid #eee"}}>
               <div>{new Date(showFacture.date).toLocaleDateString("fr-FR",{weekday:"long",year:"numeric",month:"long",day:"numeric"})}</div>
@@ -908,7 +826,6 @@ function Dashboard({ventes, produits}){
           <div style={{fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:1,marginBottom:"1rem"}}>Ventes par produit — {MOIS_LABELS[moisActuel]}</div>
           {topProduits.map(p=>{
             const prod = produits.find(x=>x.id===p.id);
-            
             return (
               <div key={p.id} style={{marginBottom:10}}>
                 <div style={{display:"flex",justifyContent:"space-between",fontSize:13,marginBottom:3}}>
@@ -935,7 +852,6 @@ function Dashboard({ventes, produits}){
         </>
       ) : (
         <div style={{textAlign:"center",padding:"3rem",color:"var(--color-text-secondary)",fontSize:14}}>
-          
           Aucune vente ce mois-ci.<br/>Enregistrez vos ventes dans l'onglet Caisse.
         </div>
       )}
@@ -952,10 +868,7 @@ function Recettes({produits, setProduits, nbres, achats}){
   const cr = p ? calcCR(p) : 0;
 
   const startEdit = ()=>{ setEditData(JSON.parse(JSON.stringify(p))); setEditing(true); };
-  const saveEdit = ()=>{
-    setProduits(prev=>prev.map(x=>x.id===editData.id?editData:x));
-    setEditing(false);
-  };
+  const saveEdit = ()=>{ setProduits(prev=>prev.map(x=>x.id===editData.id?editData:x)); setEditing(false); };
 
   const cats = [...new Set(produits.map(p=>p.categorie))];
   const catLabels = {sam:"Les Sams",sucre:"Sucrés",sandwich:"Sandwichs",boisson:"Boissons"};
@@ -995,7 +908,7 @@ function Recettes({produits, setProduits, nbres, achats}){
               <span style={{fontSize:12,padding:"2px 8px",borderRadius:"var(--border-radius-md)",background:cat_bg[p.categorie],color:cat_color[p.categorie],fontWeight:500}}>{p.categorie}</span>
             </div>
             <button onClick={startEdit} style={{border:"0.5px solid var(--color-border-tertiary)",background:"none",cursor:"pointer",padding:"6px 12px",borderRadius:"var(--border-radius-md)",fontSize:13,color:"var(--color-text-secondary)"}}>
-               Modifier
+              Modifier
             </button>
           </div>
 
@@ -1036,9 +949,7 @@ function Recettes({produits, setProduits, nbres, achats}){
                 </tbody>
               </table>
               {(()=>{
-                // Marge réelle basée sur derniers achats connus
                 const crReel = p.ingredients.reduce((s,ing)=>{
-                  // Chercher le dernier achat connu pour cet ingrédient
                   const dernier = (achats||[]).filter(a=>a.ingredient===ing.n).sort((a,b)=>b.id-a.id)[0];
                   const prixReel = dernier ? dernier.prix_unitaire : ing.pu;
                   const qteUnit = p.nbre_par_fournee>1 ? ing.q/p.nbre_par_fournee : ing.q;
@@ -1178,7 +1089,7 @@ function Recettes({produits, setProduits, nbres, achats}){
                       style={{padding:"5px 7px",border:"0.5px solid rgba(220,53,69,0.3)",borderRadius:"var(--border-radius-md)",background:"rgba(220,53,69,0.03)",color:"#dc3545",fontSize:12}}/>
                     <button onClick={()=>{const a=editData.ingredients.filter((_,j)=>j!==i);setEditData({...editData,ingredients:a});}}
                       style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-secondary)",fontSize:14}}>
-                      
+                      ✕
                     </button>
                   </div>
                   <div style={{display:"flex",gap:8,fontSize:10,color:"var(--color-text-secondary)",paddingLeft:2}}>
@@ -1209,7 +1120,6 @@ function Planif({produits, nbres, setNbres, achats, setAchats, setCourses, vente
   const [uploadMsg, setUploadMsg] = useState(null);
   const fileRef = React.useRef(null);
 
-  // État cochage + prix réels
   const [coursesSession, setCoursesSession] = useState(()=>{
     const map = {};
     produits.forEach(p=>p.ingredients.forEach(ing=>{
@@ -1218,8 +1128,6 @@ function Planif({produits, nbres, setNbres, achats, setAchats, setCourses, vente
     return map;
   });
 
-  // Ventes du jour — info affichage uniquement, ne réduit PAS le besoin courses
-  // (les ventes écoulent le stock déjà produit, pas le prévisionnel)
   const venduAujourd = {};
   (ventes||[]).filter(v=>!v.deleted&&!v.rembourse&&v.date&&v.date.startsWith(todayStr))
     .forEach(v=>v.items?.forEach(it=>{
@@ -1228,7 +1136,6 @@ function Planif({produits, nbres, setNbres, achats, setAchats, setCourses, vente
 
   const totalProduits = Object.values(nbres).reduce((s,v)=>s+v,0);
 
-  // Calcul liste de courses
   const coursesMap = {};
   produits.forEach(p=>{
     const n = nbres[p.id]||0;
@@ -1252,20 +1159,15 @@ function Planif({produits, nbres, setNbres, achats, setAchats, setCourses, vente
 
   const totalCoursesTh = Object.values(coursesMap).reduce((s,v)=>s+v.qte*v.pu,0);
 
-  // Dernier prix connu pour un ingrédient
   const getLastPrix = (nom) => {
     const a = (achats||[]).filter(x=>x.ingredient===nom).sort((a,b)=>b.id-a.id)[0];
     return a ? a.prix_unitaire : null;
   };
 
-  // Stock acheté aujourd'hui pour un ingrédient
   const getStockAchete = (nom) => {
-    return (achats||[])
-      .filter(x=>x.ingredient===nom && x.date===todayStr)
-      .reduce((s,x)=>s+x.qte_achetee, 0);
+    return (achats||[]).filter(x=>x.ingredient===nom && x.date===todayStr).reduce((s,x)=>s+x.qte_achetee, 0);
   };
 
-  // Upload facture vers Drive dossier "CBD Flandres"
   const handleUpload = async (e) => {
     const file = e.target.files[0];
     if(!file) return;
@@ -1280,33 +1182,17 @@ function Planif({produits, nbres, setNbres, achats, setAchats, setCourses, vente
       const mois = todayStr.slice(0,7);
       const fileName = "facture_" + todayStr + "_" + file.name;
       const payload = JSON.stringify({action:"upload_drive", fileName, mois, mimeType:file.type, data:base64});
-      
-      // On utilise fetch sans no-cors pour pouvoir lire la réponse
-      // Apps Script doit avoir CORS activé (Access-Control-Allow-Origin)
       let success = false;
       try {
-        const resp = await fetch(GOOGLE_URL, {
-          method:"POST",
-          headers:{"Content-Type":"text/plain"},
-          body: payload
-        });
+        const resp = await fetch(GOOGLE_URL, { method:"POST", headers:{"Content-Type":"text/plain"}, body: payload });
         const result = await resp.json();
         success = result.status === "ok";
       } catch(corsErr){
-        // CORS bloqué → fallback no-cors (on ne peut pas lire la réponse mais ça passe)
-        await fetch(GOOGLE_URL, {
-          method:"POST", mode:"no-cors",
-          headers:{"Content-Type":"text/plain"},
-          body: payload
-        });
-        success = true; // on suppose que ça a marché
+        await fetch(GOOGLE_URL, { method:"POST", mode:"no-cors", headers:{"Content-Type":"text/plain"}, body: payload });
+        success = true;
       }
-      
-      if(success){
-        setUploadMsg("✅ Facture envoyée dans CBD Flandres/" + mois + "/");
-      } else {
-        setUploadMsg("❌ Erreur lors de l'envoi au Drive");
-      }
+      if(success){ setUploadMsg("✅ Facture envoyée dans CBD Flandres/" + mois + "/"); }
+      else { setUploadMsg("❌ Erreur lors de l'envoi au Drive"); }
     } catch(err){
       setUploadMsg("❌ " + err.message);
     } finally {
@@ -1315,7 +1201,6 @@ function Planif({produits, nbres, setNbres, achats, setAchats, setCourses, vente
     }
   };
 
-  // Valider les achats cochés
   const validerAchats = () => {
     const coches = Object.entries(coursesSession).filter(([,v])=>v.checked && v.prix_reel);
     if(!coches.length) return;
@@ -1338,8 +1223,6 @@ function Planif({produits, nbres, setNbres, achats, setAchats, setCourses, vente
       montant: totalReel.toFixed(2),
       mois: new Date().getMonth()
     }]);
-    // save_all dans le useEffect [achats,...] se déclenche automatiquement
-    // Reset
     setCoursesSession(prev=>{
       const next={};
       Object.entries(prev).forEach(([k,v])=>{ next[k]={...v,checked:false,prix_reel:""}; });
@@ -1356,7 +1239,6 @@ function Planif({produits, nbres, setNbres, achats, setAchats, setCourses, vente
 
   return (
     <div>
-      {/* Quantités souhaitées */}
       <div style={{marginBottom:"1.5rem"}}>
         <div style={{fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:1,marginBottom:"0.75rem"}}>Quantités souhaitées</div>
         {cats.map(cat=>(
@@ -1389,10 +1271,7 @@ function Planif({produits, nbres, setNbres, achats, setAchats, setCourses, vente
         ))}
       </div>
 
-      {/* Courses du jour — liste cochable */}
       <div style={{background:"var(--color-background-primary)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-lg)",padding:"1.25rem",marginBottom:"1.5rem"}}>
-
-        {/* Header */}
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"1rem",flexWrap:"wrap",gap:8}}>
           <div>
             <div style={{fontSize:14,fontWeight:500}}>🛒 Courses du jour</div>
@@ -1416,7 +1295,6 @@ function Planif({produits, nbres, setNbres, achats, setAchats, setCourses, vente
           </div>
         )}
 
-        {/* Table */}
         <div style={{overflowX:"auto"}}>
           <table style={{width:"100%",fontSize:13,borderCollapse:"collapse",minWidth:480}}>
             <thead>
@@ -1504,7 +1382,6 @@ function Planif({produits, nbres, setNbres, achats, setAchats, setCourses, vente
           </table>
         </div>
 
-        {/* Barre de validation */}
         {Object.values(coursesSession).some(v=>v.checked)&&(
           <div style={{marginTop:"1rem",padding:"10px 14px",background:"var(--color-background-secondary)",borderRadius:"var(--border-radius-md)",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
             <div style={{fontSize:13}}>
@@ -1519,7 +1396,6 @@ function Planif({produits, nbres, setNbres, achats, setAchats, setCourses, vente
         )}
       </div>
 
-      {/* Résumé stock */}
       {(()=>{
         const totalAchete = Object.keys(coursesMap).reduce((s,nom)=>{
           return s + getStockAchete(nom)*(coursesMap[nom].pu||0);
@@ -1535,7 +1411,6 @@ function Planif({produits, nbres, setNbres, achats, setAchats, setCourses, vente
         );
       })()}
 
-      {/* Liste théorique */}
       <div style={{fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:1,marginBottom:"0.75rem"}}>
         Liste théorique — {fmtE(totalCoursesTh)}
       </div>
@@ -1576,6 +1451,9 @@ function Compta({ventes, params, produits, courses, setCourses}){
   const [selectedMois, setSelectedMois] = useState(moisActuel);
   const [newCourse, setNewCourse] = useState({date:"",montant:"",commercant:""});
   const [showAddCourse, setShowAddCourse] = useState(false);
+  const [uploadingId, setUploadingId] = useState(null);
+  const fileInputRef = React.useRef(null);
+  const pendingUpload = React.useRef(null);
 
   const ventesMois = ventes.filter(v=>{
     if(!v.date || v.deleted) return false;
@@ -1605,6 +1483,47 @@ function Compta({ventes, params, produits, courses, setCourses}){
     setShowAddCourse(false);
   };
 
+  const deleteCourse = (id)=>{
+    if(!window.confirm("Supprimer cette course ?")) return;
+    setCourses(prev=>prev.filter(c=>c.id!==id));
+  };
+
+  const triggerUpload = (id) => {
+    pendingUpload.current = id;
+    fileInputRef.current?.click();
+  };
+
+  const handleFile = async (e) => {
+    const file = e.target.files[0];
+    const id = pendingUpload.current;
+    if(!file || !id) return;
+    setUploadingId(id);
+    try {
+      const base64 = await new Promise((res,rej)=>{
+        const r = new FileReader();
+        r.onload = ()=>res(r.result.split(",")[1]);
+        r.onerror = ()=>rej(new Error("Lecture échouée"));
+        r.readAsDataURL(file);
+      });
+      const course = courses.find(c=>c.id===id);
+      const mois = new Date().toISOString().slice(0,7);
+      const fileName = "facture_" + (course?.date||mois) + "_" + file.name;
+      const payload = JSON.stringify({action:"upload_drive", fileName, mois, mimeType:file.type, data:base64});
+      try {
+        await fetch(GOOGLE_URL, { method:"POST", headers:{"Content-Type":"text/plain"}, body: payload });
+      } catch(err){
+        await fetch(GOOGLE_URL, { method:"POST", mode:"no-cors", headers:{"Content-Type":"text/plain"}, body: payload });
+      }
+      setCourses(prev=>prev.map(c=>c.id===id?{...c, facture_nom:file.name}:c));
+    } catch(err){
+      alert("Erreur upload: " + err.message);
+    } finally {
+      setUploadingId(null);
+      pendingUpload.current = null;
+      e.target.value = "";
+    }
+  };
+
   const Row = ({label, val, sub=false, bold=false, color=null})=>(
     <tr style={{borderBottom:"0.5px solid var(--color-border-tertiary)"}}>
       <td style={{padding:"6px 8px",fontSize:sub?12:13,paddingLeft:sub?24:8,color:sub?"var(--color-text-secondary)":"var(--color-text-primary)",fontWeight:bold?500:400}}>{label}</td>
@@ -1614,6 +1533,8 @@ function Compta({ventes, params, produits, courses, setCourses}){
 
   return (
     <div>
+      <input ref={fileInputRef} type="file" accept="image/*,application/pdf" onChange={handleFile} style={{display:"none"}}/>
+
       <div style={{display:"flex",gap:8,marginBottom:"1.5rem",flexWrap:"wrap"}}>
         {MOIS_LABELS.map((m,i)=>(
           <button key={i} onClick={()=>setSelectedMois(i)} style={{
@@ -1671,12 +1592,29 @@ function Compta({ventes, params, produits, courses, setCourses}){
             </div>
           )}
 
-          {coursesMois.map(c=>(
-            <div key={c.id} style={{display:"flex",justifyContent:"space-between",padding:"6px 0",borderBottom:"0.5px solid var(--color-border-tertiary)",fontSize:13}}>
-              <span><span style={{color:"var(--color-text-secondary)",marginRight:8}}>{c.date}</span>{c.commercant}</span>
-              <span style={{fontWeight:500}}>{fmtE(parseFloat(c.montant||0))}</span>
+          {coursesMois.map(c=>{
+            const isUploading = uploadingId===c.id;
+            return (
+            <div key={c.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0",borderBottom:"0.5px solid var(--color-border-tertiary)",fontSize:13,gap:6}}>
+              <span style={{flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis"}}>
+                <span style={{color:"var(--color-text-secondary)",marginRight:8}}>{c.date}</span>{c.commercant}
+              </span>
+              <span style={{fontWeight:500,whiteSpace:"nowrap"}}>{fmtE(parseFloat(c.montant||0))}</span>
+              <button onClick={()=>triggerUpload(c.id)} disabled={isUploading}
+                title={c.facture_nom||"Joindre une facture"}
+                style={{
+                  padding:"3px 7px",fontSize:11,borderRadius:"var(--border-radius-md)",cursor:"pointer",
+                  background:c.facture_nom?"rgba(46,125,50,0.08)":"var(--color-background-secondary)",
+                  border:"0.5px solid "+(c.facture_nom?"rgba(46,125,50,0.3)":"var(--color-border-tertiary)"),
+                  color:c.facture_nom?"#2e7d32":"var(--color-text-secondary)"
+                }}>
+                {isUploading?"…":"📎"}
+              </button>
+              <button onClick={()=>deleteCourse(c.id)} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-secondary)",fontSize:13}}>
+                ✕
+              </button>
             </div>
-          ))}
+          );})}
           {coursesMois.length===0&&<div style={{fontSize:13,color:"var(--color-text-secondary)",padding:"1rem 0"}}>Aucune course enregistrée ce mois.</div>}
           {coursesMois.length>0&&<div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",fontSize:13,fontWeight:500,borderTop:"0.5px solid var(--color-border-primary)"}}>
             <span>Total courses</span><span>{fmtE(totalCourses)}</span>
@@ -1691,34 +1629,72 @@ function CBC({cbcData, achatsCBC, setAchatsCBC}){
   const familles = [...new Set(cbcData.map(p=>p.famille))];
   const todayStr = new Date().toISOString().slice(0,10);
 
-  // Dernier prix connu (achat ou vente) pour un produit CBC
   const getLastPrix = (id, type) => {
     const a = (achatsCBC||[]).filter(x=>x.produit_id===id).sort((a,b)=>b.id-a.id)[0];
     if(!a) return null;
     return type==="achat" ? a.prix_achat : a.prix_vente;
   };
 
-  // Saisie en cours par produit
-  const [saisie, setSaisie] = useState({});
-
-  const updateSaisie = (id, key, val) => {
-    setSaisie(prev=>({...prev, [id]: {...prev[id], [key]: val}}));
+  const getStockCumule = (id) => {
+    return (achatsCBC||[]).filter(x=>x.produit_id===id).reduce((s,x)=>s+(x.quantite||0),0);
   };
 
-  const validerPrix = (p) => {
-    const s = saisie[p.id];
-    if(!s || (!s.prix_achat && !s.prix_vente)) return;
-    const dernierAchat = getLastPrix(p.id, "achat") ?? p.prix_achat;
-    const dernierVente = getLastPrix(p.id, "vente") ?? p.prix_vente;
+  const [modalEdit, setModalEdit] = useState(null);
+  const [factureFile, setFactureFile] = useState(null);
+  const [showFactureModal, setShowFactureModal] = useState(null);
+  const factureInputRef = React.useRef(null);
+
+  const openEdit = (p) => {
+    setModalEdit({
+      produit: p,
+      prix_achat: (getLastPrix(p.id,"achat") ?? p.prix_achat).toString(),
+      prix_vente: (getLastPrix(p.id,"vente") ?? p.prix_vente).toString(),
+      quantite: ""
+    });
+    setFactureFile(null);
+  };
+
+  const handleFactureSelect = (e) => {
+    const file = e.target.files[0];
+    if(!file) return;
+    setFactureFile(file);
+  };
+
+  const validerPrix = async () => {
+    if(!modalEdit) return;
+    const p = modalEdit.produit;
     const nouvelAchat = {
       id: Date.now() + Math.random(),
       produit_id: p.id,
-      prix_achat: parseFloat(s.prix_achat) || dernierAchat,
-      prix_vente: parseFloat(s.prix_vente) || dernierVente,
-      date: todayStr
+      prix_achat: parseFloat(modalEdit.prix_achat) || p.prix_achat,
+      prix_vente: parseFloat(modalEdit.prix_vente) || p.prix_vente,
+      quantite: parseFloat(modalEdit.quantite) || 0,
+      date: todayStr,
+      facture_nom: factureFile ? factureFile.name : null
     };
+
+    if(factureFile){
+      try {
+        const base64 = await new Promise((res,rej)=>{
+          const r = new FileReader();
+          r.onload = ()=>res(r.result.split(",")[1]);
+          r.onerror = ()=>rej(new Error("Lecture échouée"));
+          r.readAsDataURL(factureFile);
+        });
+        const mois = todayStr.slice(0,7);
+        const fileName = "facture_CBD_" + todayStr + "_" + factureFile.name;
+        const payload = JSON.stringify({action:"upload_drive", fileName, mois, mimeType:factureFile.type, data:base64});
+        try {
+          await fetch(GOOGLE_URL, { method:"POST", headers:{"Content-Type":"text/plain"}, body: payload });
+        } catch(e){
+          await fetch(GOOGLE_URL, { method:"POST", mode:"no-cors", headers:{"Content-Type":"text/plain"}, body: payload });
+        }
+      } catch(err){}
+    }
+
     setAchatsCBC(prev=>[...prev, nouvelAchat]);
-    setSaisie(prev=>{ const n={...prev}; delete n[p.id]; return n; });
+    setModalEdit(null);
+    setFactureFile(null);
   };
 
   const famColors = {CBC:{bg:"#BDD7EE",fg:"#1F4E79"},CBD:{bg:"#E2C6F5",fg:"#7030A0"}};
@@ -1726,8 +1702,78 @@ function CBC({cbcData, achatsCBC, setAchatsCBC}){
   return (
     <div>
       <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:"1.5rem"}}>
-        Tableau des produits CBC/CBD. Saisissez un nouveau prix pour l'historiser — il devient le prix actif sur tous les appareils.
+        Tableau des produits CBC/CBD. Cliquez sur "Modifier" pour historiser un nouveau prix et/ou une quantité achetée.
       </div>
+
+      {modalEdit&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:"1rem"}} onClick={()=>setModalEdit(null)}>
+          <div style={{background:"#ffffff",color:"#111",borderRadius:"var(--border-radius-lg)",padding:"1.5rem",maxWidth:380,width:"100%",boxShadow:"0 8px 40px rgba(0,0,0,0.18)"}} onClick={e=>e.stopPropagation()}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"1rem"}}>
+              <span style={{fontSize:15,fontWeight:600,color:"#111"}}>{modalEdit.produit.nom}</span>
+              <button onClick={()=>setModalEdit(null)} style={{background:"none",border:"none",cursor:"pointer",fontSize:18,color:"#888"}}>✕</button>
+            </div>
+
+            <label style={{fontSize:12,color:"#555",display:"block",marginBottom:4}}>Prix d'achat (€)</label>
+            <input type="number" step="0.01" value={modalEdit.prix_achat}
+              onChange={e=>setModalEdit({...modalEdit,prix_achat:e.target.value})}
+              style={{width:"100%",padding:"8px 10px",fontSize:14,border:"1px solid #ddd",borderRadius:8,marginBottom:10,color:"#111",background:"#fafafa"}}/>
+
+            <label style={{fontSize:12,color:"#555",display:"block",marginBottom:4}}>Prix de vente (€)</label>
+            <input type="number" step="0.01" value={modalEdit.prix_vente}
+              onChange={e=>setModalEdit({...modalEdit,prix_vente:e.target.value})}
+              style={{width:"100%",padding:"8px 10px",fontSize:14,border:"1px solid #ddd",borderRadius:8,marginBottom:10,color:"#111",background:"#fafafa"}}/>
+
+            <label style={{fontSize:12,color:"#555",display:"block",marginBottom:4}}>Quantité achetée (facultatif)</label>
+            <input type="number" step="1" placeholder="0" value={modalEdit.quantite}
+              onChange={e=>setModalEdit({...modalEdit,quantite:e.target.value})}
+              style={{width:"100%",padding:"8px 10px",fontSize:14,border:"1px solid #ddd",borderRadius:8,marginBottom:12,color:"#111",background:"#fafafa"}}/>
+
+            <input ref={factureInputRef} type="file" accept="image/*,application/pdf" onChange={handleFactureSelect} style={{display:"none"}}/>
+            <button onClick={()=>factureInputRef.current?.click()}
+              style={{width:"100%",padding:"9px",background:factureFile?"rgba(46,125,50,0.06)":"none",border:"1px dashed "+(factureFile?"#2e7d32":"#ccc"),borderRadius:8,cursor:"pointer",fontSize:13,color:factureFile?"#2e7d32":"#666",marginBottom:14,display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
+              📎 {factureFile ? factureFile.name : "Joindre une facture (facultatif)"}
+            </button>
+
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={validerPrix}
+                style={{flex:1,padding:"10px",background:"#111",color:"#fff",border:"none",borderRadius:8,cursor:"pointer",fontSize:14,fontWeight:600}}>
+                Valider
+              </button>
+              <button onClick={()=>setModalEdit(null)}
+                style={{padding:"10px 16px",background:"none",border:"1px solid #ddd",borderRadius:8,cursor:"pointer",fontSize:14,color:"#888"}}>
+                Annuler
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showFactureModal&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:"1rem"}} onClick={()=>setShowFactureModal(null)}>
+          <div style={{background:"#ffffff",color:"#111",borderRadius:"var(--border-radius-lg)",padding:"1.5rem",maxWidth:380,width:"100%",boxShadow:"0 8px 40px rgba(0,0,0,0.18)"}} onClick={e=>e.stopPropagation()}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"1rem"}}>
+              <span style={{fontSize:15,fontWeight:600,color:"#111"}}>Historique des achats</span>
+              <button onClick={()=>setShowFactureModal(null)} style={{background:"none",border:"none",cursor:"pointer",fontSize:18,color:"#888"}}>✕</button>
+            </div>
+            <div style={{maxHeight:300,overflowY:"auto"}}>
+              {(achatsCBC||[]).filter(a=>a.produit_id===showFactureModal.id).sort((a,b)=>b.id-a.id).map(a=>(
+                <div key={a.id} style={{padding:"8px 0",borderBottom:"1px solid #eee",fontSize:13}}>
+                  <div style={{display:"flex",justifyContent:"space-between"}}>
+                    <span style={{color:"#666"}}>{a.date}</span>
+                    <span style={{fontWeight:500}}>{fmtE(a.prix_achat)} → {fmtE(a.prix_vente)}</span>
+                  </div>
+                  {a.quantite>0&&<div style={{color:"#888",fontSize:12}}>Qté: {a.quantite}</div>}
+                  {a.facture_nom&&<div style={{color:"#2e7d32",fontSize:12}}>📎 {a.facture_nom}</div>}
+                </div>
+              ))}
+              {(achatsCBC||[]).filter(a=>a.produit_id===showFactureModal.id).length===0&&(
+                <div style={{color:"#888",fontSize:13,textAlign:"center",padding:"1rem 0"}}>Aucun achat historisé.</div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {familles.map(fam=>(
         <div key={fam} style={{marginBottom:"2rem"}}>
           <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:"0.75rem"}}>
@@ -1736,7 +1782,7 @@ function CBC({cbcData, achatsCBC, setAchatsCBC}){
           <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
             <thead>
               <tr style={{borderBottom:"0.5px solid var(--color-border-tertiary)"}}>
-                {["Produit","Taux","Achat actuel","Vente actuelle","Marge","Nouveau prix"].map(h=>(
+                {["Produit","Stock cumulé","Achat actuel","Vente actuelle","Marge","Facture",""].map(h=>(
                   <th key={h} style={{textAlign:h==="Produit"?"left":"right",padding:"6px 8px",color:"var(--color-text-secondary)",fontWeight:400,fontSize:12}}>{h}</th>
                 ))}
               </tr>
@@ -1746,27 +1792,27 @@ function CBC({cbcData, achatsCBC, setAchatsCBC}){
                 const prixAchatActuel = getLastPrix(p.id,"achat") ?? p.prix_achat;
                 const prixVenteActuel = getLastPrix(p.id,"vente") ?? p.prix_vente;
                 const marge = prixVenteActuel>0 ? (prixVenteActuel-prixAchatActuel)/prixVenteActuel*100 : 0;
-                const s = saisie[p.id]||{};
+                const stock = getStockCumule(p.id);
                 return (
                   <tr key={p.id} style={{borderBottom:"0.5px solid var(--color-border-tertiary)"}}>
                     <td style={{padding:"8px 8px",fontWeight:400}}>{p.nom}</td>
-                    <td style={{textAlign:"right",padding:"8px 8px"}}><span style={{background:famColors[fam]?.bg||"#EEE",color:famColors[fam]?.fg||"#333",padding:"2px 8px",borderRadius:"var(--border-radius-md)",fontSize:11}}>{p.taux}</span></td>
+                    <td style={{textAlign:"right",padding:"8px 8px",color:stock>0?"#2e7d32":"var(--color-text-secondary)",fontWeight:stock>0?500:400}}>
+                      {stock>0?stock:"—"}
+                    </td>
                     <td style={{textAlign:"right",padding:"8px 8px",color:"var(--color-text-secondary)"}}>{fmtE(prixAchatActuel)}</td>
                     <td style={{textAlign:"right",padding:"8px 8px",fontWeight:500}}>{fmtE(prixVenteActuel)}</td>
                     <td style={{textAlign:"right",padding:"8px 8px",color:marge>50?"var(--color-text-success)":"var(--color-text-warning)"}}>{fmt(marge,0)}%</td>
-                    <td style={{padding:"6px 4px"}}>
-                      <div style={{display:"flex",gap:4,justifyContent:"flex-end",alignItems:"center"}}>
-                        <input type="number" step="0.01" placeholder="Achat" value={s.prix_achat||""}
-                          onChange={e=>updateSaisie(p.id,"prix_achat",e.target.value)}
-                          style={{width:60,padding:"4px 6px",border:"0.5px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",background:"var(--color-background-primary)",color:"var(--color-text-primary)",fontSize:12,textAlign:"right"}}/>
-                        <input type="number" step="0.01" placeholder="Vente" value={s.prix_vente||""}
-                          onChange={e=>updateSaisie(p.id,"prix_vente",e.target.value)}
-                          style={{width:60,padding:"4px 6px",border:"0.5px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",background:"var(--color-background-primary)",color:"var(--color-text-primary)",fontSize:12,textAlign:"right"}}/>
-                        <button onClick={()=>validerPrix(p)} disabled={!s.prix_achat&&!s.prix_vente}
-                          style={{padding:"4px 10px",background:(s.prix_achat||s.prix_vente)?"var(--color-text-primary)":"var(--color-background-secondary)",color:(s.prix_achat||s.prix_vente)?"var(--color-background-primary)":"var(--color-text-secondary)",border:"none",borderRadius:"var(--border-radius-md)",cursor:(s.prix_achat||s.prix_vente)?"pointer":"default",fontSize:11}}>
-                          OK
-                        </button>
-                      </div>
+                    <td style={{textAlign:"right",padding:"6px 4px"}}>
+                      <button onClick={()=>setShowFactureModal(p)}
+                        style={{padding:"5px 10px",background:"none",color:"var(--color-text-secondary)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",cursor:"pointer",fontSize:11}}>
+                        📎
+                      </button>
+                    </td>
+                    <td style={{textAlign:"right",padding:"6px 4px"}}>
+                      <button onClick={()=>openEdit(p)}
+                        style={{padding:"5px 12px",background:"var(--color-background-secondary)",color:"var(--color-text-secondary)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",cursor:"pointer",fontSize:12}}>
+                        Modifier
+                      </button>
                     </td>
                   </tr>
                 );
@@ -1776,7 +1822,7 @@ function CBC({cbcData, achatsCBC, setAchatsCBC}){
         </div>
       ))}
       <div style={{fontSize:12,color:"var(--color-text-secondary)",marginTop:"0.5rem"}}>
-        Le dernier prix saisi devient le prix actif partout (caisse, marges) — l'historique complet est conservé.
+        Le prix saisi via "Modifier" devient le prix actif partout (caisse, marges) — l'historique complet est conservé.
       </div>
     </div>
   );
@@ -1834,10 +1880,60 @@ function Params({params, setParams}){
     });
   };
   const addCharge = (type)=>setParams(prev=>({...prev,[type]:[...prev[type],{label:"Nouveau frais",montant:0}]}));
-  const delCharge = (type, i)=>setParams(prev=>({...prev,[type]:prev[type].filter((_,j)=>j!==i)}));
+  const delCharge = (type, i)=>{
+    if(!window.confirm("Supprimer cette charge ?")) return;
+    setParams(prev=>({...prev,[type]:prev[type].filter((_,j)=>j!==i)}));
+  };
+
+  const [uploadingIdx, setUploadingIdx] = useState(null);
+  const fileInputRef = React.useRef(null);
+  const pendingUpload = React.useRef(null);
+
+  const PREFIX_LABELS = {
+    charges_fixes: "Charges fixes mensuelles",
+    charges_variables_fixes: "Charges variables récurrentes",
+  };
+
+  const triggerUpload = (type, i) => {
+    pendingUpload.current = { type, i };
+    fileInputRef.current?.click();
+  };
+
+  const handleFile = async (e) => {
+    const file = e.target.files[0];
+    if(!file || !pendingUpload.current) return;
+    const { type, i } = pendingUpload.current;
+    setUploadingIdx(type+"-"+i);
+    try {
+      const base64 = await new Promise((res,rej)=>{
+        const r = new FileReader();
+        r.onload = ()=>res(r.result.split(",")[1]);
+        r.onerror = ()=>rej(new Error("Lecture échouée"));
+        r.readAsDataURL(file);
+      });
+      const label = params[type][i]?.label || "frais";
+      const mois = new Date().toISOString().slice(0,7);
+      const fileName = PREFIX_LABELS[type] + " – " + label + " – " + file.name;
+      const payload = JSON.stringify({action:"upload_drive", fileName, mois, mimeType:file.type, data:base64});
+      try {
+        await fetch(GOOGLE_URL, { method:"POST", headers:{"Content-Type":"text/plain"}, body: payload });
+      } catch(err){
+        await fetch(GOOGLE_URL, { method:"POST", mode:"no-cors", headers:{"Content-Type":"text/plain"}, body: payload });
+      }
+      updCharge(type, i, "facture_nom", file.name);
+    } catch(err){
+      alert("Erreur upload: " + err.message);
+    } finally {
+      setUploadingIdx(null);
+      pendingUpload.current = null;
+      e.target.value = "";
+    }
+  };
 
   return (
     <div>
+      <input ref={fileInputRef} type="file" accept="image/*,application/pdf" onChange={handleFile} style={{display:"none"}}/>
+
       <div style={{marginBottom:"2rem"}}>
         <div style={{fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:1,marginBottom:"1rem"}}>Taux fiscaux & sociaux</div>
         <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:12}}>
@@ -1866,18 +1962,31 @@ function Params({params, setParams}){
             <div style={{fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:1}}>{label}</div>
             <button onClick={()=>addCharge(type)} style={{fontSize:12,padding:"4px 10px",border:"0.5px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",background:"none",cursor:"pointer",color:"var(--color-text-secondary)"}}>+ Ajouter</button>
           </div>
-          {params[type].map((c,i)=>(
-            <div key={i} style={{display:"flex",gap:8,marginBottom:8,alignItems:"center"}}>
+          {params[type].map((c,i)=>{
+            const key = type+"-"+i;
+            const isUploading = uploadingIdx===key;
+            return (
+            <div key={i} style={{display:"flex",gap:6,marginBottom:8,alignItems:"center",flexWrap:"wrap"}}>
               <input value={c.label} onChange={e=>updCharge(type,i,"label",e.target.value)}
-                style={{flex:1,padding:"6px 10px",border:"0.5px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",background:"var(--color-background-primary)",color:"var(--color-text-primary)",fontSize:13}}/>
+                style={{flex:1,minWidth:120,padding:"6px 10px",border:"0.5px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",background:"var(--color-background-primary)",color:"var(--color-text-primary)",fontSize:13}}/>
               <input type="number" step="0.01" value={c.montant} onChange={e=>updCharge(type,i,"montant",e.target.value)}
-                style={{width:90,padding:"6px 10px",border:"0.5px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",background:"var(--color-background-primary)",color:"var(--color-text-primary)",fontSize:13,textAlign:"right"}}/>
-              <span style={{fontSize:12,color:"var(--color-text-secondary)"}}>€/mois</span>
+                style={{width:80,padding:"6px 10px",border:"0.5px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",background:"var(--color-background-primary)",color:"var(--color-text-primary)",fontSize:13,textAlign:"right"}}/>
+              <span style={{fontSize:11,color:"var(--color-text-secondary)"}}>€/mois</span>
+              <button onClick={()=>triggerUpload(type,i)} disabled={isUploading}
+                title={c.facture_nom||"Joindre une facture"}
+                style={{
+                  padding:"5px 9px",fontSize:11,borderRadius:"var(--border-radius-md)",cursor:"pointer",
+                  background:c.facture_nom?"rgba(46,125,50,0.08)":"var(--color-background-secondary)",
+                  border:"0.5px solid "+(c.facture_nom?"rgba(46,125,50,0.3)":"var(--color-border-tertiary)"),
+                  color:c.facture_nom?"#2e7d32":"var(--color-text-secondary)"
+                }}>
+                {isUploading?"…":"📎"}
+              </button>
               <button onClick={()=>delCharge(type,i)} style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-secondary)",fontSize:14}}>
-                
+                ✕
               </button>
             </div>
-          ))}
+          );})}
           <div style={{textAlign:"right",fontSize:13,fontWeight:500,borderTop:"0.5px solid var(--color-border-tertiary)",paddingTop:8}}>
             Total: {fmtE(params[type].reduce((s,c)=>s+c.montant,0))} / mois
           </div>
