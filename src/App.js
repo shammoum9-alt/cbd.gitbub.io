@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 
-const GOOGLE_URL = "https://script.google.com/macros/s/AKfycbz2lcDc_0K3Ax95Ffj-MnNmu1CKuKAxXlsNOYsj6A_DkIZfwz54QsMRSVZ6oLfIvivNUw/exec";
+const GOOGLE_URL = "https://script.google.com/macros/s/AKfycby7fi3563a2x5wXbDXQa8ohcDKZCMKX_g1M_0SOZHt5jw2lJJz3f6qWLrucb9Wv3PgUGw/exec";
 
 const PRODUITS = [
   { id:"sam_choc", nom:"Sam Choc", prix:1.5, categorie:"sam", allergenes:["gluten","oeufs","lait","fruits_a_coque"],
@@ -86,8 +86,8 @@ const defaultParams = {
   taux_ir: 0.01,
   abattement: 0.71,
   charges_fixes: [
-    { label:"Emplacement marché", montant:220 },
-    { label:"Location food truck", montant:1600 },
+    { label:"Loyer", montant:650 },
+    { label:"Électricité / Eau", montant:80 },
     { label:"Assurance Pro", montant:73 },
     { label:"SumUp / TPE", montant:40 },
   ],
@@ -184,10 +184,13 @@ export default function App() {
   const [ventes, setVentes] = useState([]);
   const [produits, setProduits] = useState(PRODUITS);
   const [cbcData, setCbcData] = useState(CBC_CBD);
+  const [produitsModifiedAt, setProduitsModifiedAt] = useState(0);
+  const [paramsModifiedAt, setParamsModifiedAt] = useState(0);
   const [params, setParams] = useState(defaultParams);
   const [courses, setCourses] = useState([]);
   const [journalCaisse, setJournalCaisse] = useState([]);
-  const [achats, setAchats] = useState([]); // historique vrais prix d'achat
+  const [achats, setAchats] = useState([]); // historique vrais prix d'achat ingrédients
+  const [achatsCBC, setAchatsCBC] = useState([]); // historique vrais prix CBC/CBD (union par id, partagé)
   const [loaded, setLoaded] = useState(false);
   const [nbres, setNbres] = useState(()=>{
     const d={};
@@ -198,6 +201,10 @@ export default function App() {
   // Ref pour accéder aux ventes courantes dans le merge sans recréer l'effect
   const ventesRef = useRef([]);
   useEffect(()=>{ ventesRef.current = ventes; },[ventes]);
+  const paramsModifiedAtRef = useRef(0);
+  useEffect(()=>{ paramsModifiedAtRef.current = paramsModifiedAt; },[paramsModifiedAt]);
+  const produitsModifiedAtRef = useRef(0);
+  useEffect(()=>{ produitsModifiedAtRef.current = produitsModifiedAt; },[produitsModifiedAt]);
 
   useEffect(()=>{
     // 1. Charge localStorage immédiatement
@@ -206,11 +213,14 @@ export default function App() {
       if(local.ventes?.length) setVentes(local.ventes);
       if(local.produits?.length) setProduits(local.produits);
       if(local.cbcData?.length) setCbcData(local.cbcData);
+      if(local.produitsModifiedAt) setProduitsModifiedAt(local.produitsModifiedAt);
+      if(local.paramsModifiedAt) setParamsModifiedAt(local.paramsModifiedAt);
       if(local.params) setParams(local.params);
       if(local.nbres) setNbres(local.nbres);
       if(local.courses?.length) setCourses(local.courses);
       if(local.journalCaisse?.length) setJournalCaisse(local.journalCaisse);
       if(local.achats?.length) setAchats(local.achats);
+      if(local.achatsCBC?.length) setAchatsCBC(local.achatsCBC);
     }
     setLoaded(true);
 
@@ -238,7 +248,19 @@ export default function App() {
         // Sinon → garder local (priorité à ce qu'on a saisi ici)
         return isDefault ? remote.nbres : current;
       });
-      setParams(current => remote.params ? remote.params : current);
+      // Merge params : le plus récent gagne, basé sur timestamp (refs pour lecture sûre)
+      if(remote.params && remote.paramsModifiedAt > paramsModifiedAtRef.current){
+        setParams(remote.params);
+        setParamsModifiedAt(remote.paramsModifiedAt);
+      } else if(remote.params && !remote.paramsModifiedAt && !paramsModifiedAtRef.current){
+        // Compat : remote sans timestamp et jamais modifié localement
+        setParams(remote.params);
+      }
+      // Merge produits (recettes/prix) : le plus récent gagne, basé sur timestamp
+      if(remote.produits?.length && remote.produitsModifiedAt > produitsModifiedAtRef.current){
+        setProduits(remote.produits);
+        setProduitsModifiedAt(remote.produitsModifiedAt);
+      }
       // Merge journal caisse : union par id
       if(remote.journalCaisse?.length) setJournalCaisse(current => {
         const map = {};
@@ -251,6 +273,13 @@ export default function App() {
         const map = {};
         current.forEach(a => { if(a?.id) map[a.id] = a; });
         remote.achats.forEach(a => { if(a?.id) map[a.id] = a; });
+        return Object.values(map).sort((a,b) => a.id - b.id);
+      });
+      // Merge achatsCBC : union par id (même logique que achats)
+      if(remote.achatsCBC?.length) setAchatsCBC(current => {
+        const map = {};
+        current.forEach(a => { if(a?.id) map[a.id] = a; });
+        remote.achatsCBC.forEach(a => { if(a?.id) map[a.id] = a; });
         return Object.values(map).sort((a,b) => a.id - b.id);
       });
       setCourses(current => {
@@ -284,10 +313,10 @@ export default function App() {
 
   useEffect(()=>{
     if(!loaded) return;
-    const data = {ventes, produits, cbcData, params, nbres, courses, journalCaisse, achats};
+    const data = {ventes, produits, cbcData, params, nbres, courses, journalCaisse, achats, achatsCBC, produitsModifiedAt, paramsModifiedAt};
     saveLocal(data);      // immédiat
     saveRemote(data);     // async Google Sheets
-  },[ventes, produits, cbcData, params, nbres, courses, journalCaisse, achats, loaded]);
+  },[ventes, produits, cbcData, params, nbres, courses, journalCaisse, achats, achatsCBC, produitsModifiedAt, paramsModifiedAt, loaded]);
 
   const addVente = useCallback((v)=>{ setVentes(prev=>[...prev, {...v, id:Date.now(), date:new Date().toISOString()}]); },[]);
   const deleteVente = useCallback((id)=>{
@@ -302,6 +331,16 @@ export default function App() {
 
   const rembourserVente = useCallback((id)=>{
     setVentes(prev=>prev.map(v=>v.id===id ? {...v, rembourse:true} : v));
+  },[]);
+
+  // Wrappers qui marquent le timestamp de modification pour la sync multi-device
+  const setProduitsTracked = useCallback((updater)=>{
+    setProduits(updater);
+    setProduitsModifiedAt(Date.now());
+  },[]);
+  const setParamsTracked = useCallback((updater)=>{
+    setParams(updater);
+    setParamsModifiedAt(Date.now());
   },[]);
 
   const tabs = [
@@ -341,20 +380,20 @@ export default function App() {
         </div>
       </div>
       <div style={{padding:"1.5rem 1rem"}}>
-        {tab==="caisse" && <Caisse produits={produits} cbcData={cbcData} onAdd={addVente} ventes={ventes} onDelete={deleteVente} onRembourser={rembourserVente} journalCaisse={journalCaisse} addJournalEvent={addJournalEvent}/>}
+        {tab==="caisse" && <Caisse produits={produits} cbcData={cbcData} achatsCBC={achatsCBC} onAdd={addVente} ventes={ventes} onDelete={deleteVente} onRembourser={rembourserVente} journalCaisse={journalCaisse} addJournalEvent={addJournalEvent}/>}
         {tab==="dashboard" && <Dashboard ventes={ventes} produits={produits}/>}
-        {tab==="recettes" && <Recettes produits={produits} setProduits={setProduits} nbres={nbres} achats={achats}/>}
+        {tab==="recettes" && <Recettes produits={produits} setProduits={setProduitsTracked} nbres={nbres} achats={achats}/>}
         {tab==="planif" && <Planif produits={produits} nbres={nbres} setNbres={setNbres} achats={achats} setAchats={setAchats} setCourses={setCourses} ventes={ventes}/>}
         {tab==="compta" && <Compta ventes={ventes} params={params} produits={produits} courses={courses} setCourses={setCourses}/>}
-        {tab==="cbc" && <CBC cbcData={cbcData} setCbcData={setCbcData}/>}
+        {tab==="cbc" && <CBC cbcData={cbcData} achatsCBC={achatsCBC} setAchatsCBC={setAchatsCBC}/>}
         {tab==="allergenes" && <Allergenes produits={produits}/>}
-        {tab==="params" && <Params params={params} setParams={setParams}/>}
+        {tab==="params" && <Params params={params} setParams={setParamsTracked}/>}
       </div>
     </div>
   );
 }
 
-function Caisse({produits, cbcData, onAdd, ventes, onDelete: deleteVente, onRembourser, journalCaisse, addJournalEvent}){
+function Caisse({produits, cbcData, achatsCBC, onAdd, ventes, onDelete: deleteVente, onRembourser, journalCaisse, addJournalEvent}){
   const todayStr = new Date().toISOString().slice(0,10);
 
   // ── États saisie vente ──
@@ -388,7 +427,14 @@ function Caisse({produits, cbcData, onAdd, ventes, onDelete: deleteVente, onRemb
   },[todayStr]);
 
   // ── Helpers ──
-  const getPrix = (id) => { const p=produits.find(x=>x.id===id)||(cbcData||[]).find(x=>x.id===id); return p?.prix||p?.prix_vente||0; };
+  const getPrix = (id) => {
+    const p = produits.find(x=>x.id===id);
+    if(p) return p.prix||0;
+    const c = (cbcData||[]).find(x=>x.id===id);
+    if(!c) return 0;
+    const dernier = (achatsCBC||[]).filter(a=>a.produit_id===id).sort((a,b)=>b.id-a.id)[0];
+    return dernier ? dernier.prix_vente : c.prix_vente||0;
+  };
   const getNom  = (id) => { const p=produits.find(x=>x.id===id)||(cbcData||[]).find(x=>x.id===id); return p?.nom||id; };
 
   // ── Calculs vente ──
@@ -466,10 +512,10 @@ function Caisse({produits, cbcData, onAdd, ventes, onDelete: deleteVente, onRemb
         </optgroup>
       ))}
       {(cbcData||[]).length>0&&(<>
-        <optgroup label="── CBC Fleurs">{cbcData.filter(x=>x.famille==="CBC"&&x.type==="fleur").map(x=><option key={x.id} value={x.id}>{x.nom} — {x.prix_vente}€</option>)}</optgroup>
-        <optgroup label="── CBC Résines">{cbcData.filter(x=>x.famille==="CBC"&&x.type==="résine").map(x=><option key={x.id} value={x.id}>{x.nom} — {x.prix_vente}€</option>)}</optgroup>
-        <optgroup label="── CBD Fleurs">{cbcData.filter(x=>x.famille==="CBD"&&x.type==="fleur").map(x=><option key={x.id} value={x.id}>{x.nom} — {x.prix_vente}€</option>)}</optgroup>
-        <optgroup label="── CBD Résines">{cbcData.filter(x=>x.famille==="CBD"&&x.type==="résine").map(x=><option key={x.id} value={x.id}>{x.nom} — {x.prix_vente}€</option>)}</optgroup>
+        <optgroup label="── CBC Fleurs">{cbcData.filter(x=>x.famille==="CBC"&&x.type==="fleur").map(x=><option key={x.id} value={x.id}>{x.nom} — {fmtE(getPrix(x.id))}</option>)}</optgroup>
+        <optgroup label="── CBC Résines">{cbcData.filter(x=>x.famille==="CBC"&&x.type==="résine").map(x=><option key={x.id} value={x.id}>{x.nom} — {fmtE(getPrix(x.id))}</option>)}</optgroup>
+        <optgroup label="── CBD Fleurs">{cbcData.filter(x=>x.famille==="CBD"&&x.type==="fleur").map(x=><option key={x.id} value={x.id}>{x.nom} — {fmtE(getPrix(x.id))}</option>)}</optgroup>
+        <optgroup label="── CBD Résines">{cbcData.filter(x=>x.famille==="CBD"&&x.type==="résine").map(x=><option key={x.id} value={x.id}>{x.nom} — {fmtE(getPrix(x.id))}</option>)}</optgroup>
       </>)}
     </select>
   );
@@ -1641,12 +1687,38 @@ function Compta({ventes, params, produits, courses, setCourses}){
   );
 }
 
-function CBC({cbcData, setCbcData}){
+function CBC({cbcData, achatsCBC, setAchatsCBC}){
   const familles = [...new Set(cbcData.map(p=>p.famille))];
-  const [editing, setEditing] = useState(null);
+  const todayStr = new Date().toISOString().slice(0,10);
 
-  const update = (id, key, val)=>{
-    setCbcData(prev=>prev.map(p=>p.id===id?{...p,[key]:parseFloat(val)||0}:p));
+  // Dernier prix connu (achat ou vente) pour un produit CBC
+  const getLastPrix = (id, type) => {
+    const a = (achatsCBC||[]).filter(x=>x.produit_id===id).sort((a,b)=>b.id-a.id)[0];
+    if(!a) return null;
+    return type==="achat" ? a.prix_achat : a.prix_vente;
+  };
+
+  // Saisie en cours par produit
+  const [saisie, setSaisie] = useState({});
+
+  const updateSaisie = (id, key, val) => {
+    setSaisie(prev=>({...prev, [id]: {...prev[id], [key]: val}}));
+  };
+
+  const validerPrix = (p) => {
+    const s = saisie[p.id];
+    if(!s || (!s.prix_achat && !s.prix_vente)) return;
+    const dernierAchat = getLastPrix(p.id, "achat") ?? p.prix_achat;
+    const dernierVente = getLastPrix(p.id, "vente") ?? p.prix_vente;
+    const nouvelAchat = {
+      id: Date.now() + Math.random(),
+      produit_id: p.id,
+      prix_achat: parseFloat(s.prix_achat) || dernierAchat,
+      prix_vente: parseFloat(s.prix_vente) || dernierVente,
+      date: todayStr
+    };
+    setAchatsCBC(prev=>[...prev, nouvelAchat]);
+    setSaisie(prev=>{ const n={...prev}; delete n[p.id]; return n; });
   };
 
   const famColors = {CBC:{bg:"#BDD7EE",fg:"#1F4E79"},CBD:{bg:"#E2C6F5",fg:"#7030A0"}};
@@ -1654,7 +1726,7 @@ function CBC({cbcData, setCbcData}){
   return (
     <div>
       <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:"1.5rem"}}>
-        Tableau des produits CBC/CBD — sans recette. Mettez à jour les prix selon vos tarifs fournisseurs.
+        Tableau des produits CBC/CBD. Saisissez un nouveau prix pour l'historiser — il devient le prix actif sur tous les appareils.
       </div>
       {familles.map(fam=>(
         <div key={fam} style={{marginBottom:"2rem"}}>
@@ -1664,30 +1736,38 @@ function CBC({cbcData, setCbcData}){
           <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
             <thead>
               <tr style={{borderBottom:"0.5px solid var(--color-border-tertiary)"}}>
-                {["Produit","Taux","Poids (g)","Prix achat (€)","Prix vente (€)","Marge (%)"].map(h=>(
+                {["Produit","Taux","Achat actuel","Vente actuelle","Marge","Nouveau prix"].map(h=>(
                   <th key={h} style={{textAlign:h==="Produit"?"left":"right",padding:"6px 8px",color:"var(--color-text-secondary)",fontWeight:400,fontSize:12}}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {cbcData.filter(p=>p.famille===fam).map(p=>{
-                const marge = p.prix_vente>0 ? (p.prix_vente-p.prix_achat)/p.prix_vente*100 : 0;
-                const isEdit = editing===p.id;
+                const prixAchatActuel = getLastPrix(p.id,"achat") ?? p.prix_achat;
+                const prixVenteActuel = getLastPrix(p.id,"vente") ?? p.prix_vente;
+                const marge = prixVenteActuel>0 ? (prixVenteActuel-prixAchatActuel)/prixVenteActuel*100 : 0;
+                const s = saisie[p.id]||{};
                 return (
-                  <tr key={p.id} style={{borderBottom:"0.5px solid var(--color-border-tertiary)",cursor:"pointer",background:isEdit?"var(--color-background-secondary)":"transparent"}}
-                    onClick={()=>setEditing(isEdit?null:p.id)}>
+                  <tr key={p.id} style={{borderBottom:"0.5px solid var(--color-border-tertiary)"}}>
                     <td style={{padding:"8px 8px",fontWeight:400}}>{p.nom}</td>
                     <td style={{textAlign:"right",padding:"8px 8px"}}><span style={{background:famColors[fam]?.bg||"#EEE",color:famColors[fam]?.fg||"#333",padding:"2px 8px",borderRadius:"var(--border-radius-md)",fontSize:11}}>{p.taux}</span></td>
-                    <td style={{textAlign:"right",padding:"8px 8px"}}>
-                      {isEdit?<input type="number" value={p.poids} onChange={e=>update(p.id,"poids",e.target.value)} onClick={e=>e.stopPropagation()} style={{width:55,padding:"3px 5px",border:"0.5px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",background:"var(--color-background-primary)",color:"var(--color-text-primary)",fontSize:12,textAlign:"right"}}/>:p.poids}
-                    </td>
-                    <td style={{textAlign:"right",padding:"8px 8px"}}>
-                      {isEdit?<input type="number" step="0.01" value={p.prix_achat} onChange={e=>update(p.id,"prix_achat",e.target.value)} onClick={e=>e.stopPropagation()} style={{width:65,padding:"3px 5px",border:"0.5px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",background:"var(--color-background-primary)",color:"var(--color-text-primary)",fontSize:12,textAlign:"right"}}/>:fmtE(p.prix_achat)}
-                    </td>
-                    <td style={{textAlign:"right",padding:"8px 8px"}}>
-                      {isEdit?<input type="number" step="0.01" value={p.prix_vente} onChange={e=>update(p.id,"prix_vente",e.target.value)} onClick={e=>e.stopPropagation()} style={{width:65,padding:"3px 5px",border:"0.5px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",background:"var(--color-background-primary)",color:"var(--color-text-primary)",fontSize:12,textAlign:"right"}}/>:<span style={{fontWeight:500}}>{fmtE(p.prix_vente)}</span>}
-                    </td>
+                    <td style={{textAlign:"right",padding:"8px 8px",color:"var(--color-text-secondary)"}}>{fmtE(prixAchatActuel)}</td>
+                    <td style={{textAlign:"right",padding:"8px 8px",fontWeight:500}}>{fmtE(prixVenteActuel)}</td>
                     <td style={{textAlign:"right",padding:"8px 8px",color:marge>50?"var(--color-text-success)":"var(--color-text-warning)"}}>{fmt(marge,0)}%</td>
+                    <td style={{padding:"6px 4px"}}>
+                      <div style={{display:"flex",gap:4,justifyContent:"flex-end",alignItems:"center"}}>
+                        <input type="number" step="0.01" placeholder="Achat" value={s.prix_achat||""}
+                          onChange={e=>updateSaisie(p.id,"prix_achat",e.target.value)}
+                          style={{width:60,padding:"4px 6px",border:"0.5px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",background:"var(--color-background-primary)",color:"var(--color-text-primary)",fontSize:12,textAlign:"right"}}/>
+                        <input type="number" step="0.01" placeholder="Vente" value={s.prix_vente||""}
+                          onChange={e=>updateSaisie(p.id,"prix_vente",e.target.value)}
+                          style={{width:60,padding:"4px 6px",border:"0.5px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",background:"var(--color-background-primary)",color:"var(--color-text-primary)",fontSize:12,textAlign:"right"}}/>
+                        <button onClick={()=>validerPrix(p)} disabled={!s.prix_achat&&!s.prix_vente}
+                          style={{padding:"4px 10px",background:(s.prix_achat||s.prix_vente)?"var(--color-text-primary)":"var(--color-background-secondary)",color:(s.prix_achat||s.prix_vente)?"var(--color-background-primary)":"var(--color-text-secondary)",border:"none",borderRadius:"var(--border-radius-md)",cursor:(s.prix_achat||s.prix_vente)?"pointer":"default",fontSize:11}}>
+                          OK
+                        </button>
+                      </div>
+                    </td>
                   </tr>
                 );
               })}
@@ -1696,12 +1776,12 @@ function CBC({cbcData, setCbcData}){
         </div>
       ))}
       <div style={{fontSize:12,color:"var(--color-text-secondary)",marginTop:"0.5rem"}}>
-        
-        Cliquer sur une ligne pour modifier les prix.
+        Le dernier prix saisi devient le prix actif partout (caisse, marges) — l'historique complet est conservé.
       </div>
     </div>
   );
 }
+
 
 function Allergenes({produits}){
   const allergenes = Object.keys(ALLERGENES_MAP);
