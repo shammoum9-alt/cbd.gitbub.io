@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState} from "react";
 
 function fmt(n, dec=2){ return isNaN(n) ? "—" : Number(n).toFixed(dec); }
 function fmtE(n){ return isNaN(n) ? "—" : Number(n).toFixed(2)+"€"; }

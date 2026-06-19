@@ -1,8 +1,5 @@
-import React, { useState, useEffect, useCallback, useRef } from "react";
 
-function fmt(n, dec=2){ return isNaN(n) ? "—" : Number(n).toFixed(dec); }
 function fmtE(n){ return isNaN(n) ? "—" : Number(n).toFixed(2)+"€"; }
-
 
 export default function Dashboard({ventes, produits}){
   const now = new Date();
