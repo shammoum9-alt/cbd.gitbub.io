@@ -94,8 +94,40 @@ const defaultParams = {
   charges_variables_fixes: [
     { label:"Fournitures diverses", montant:86 },
     { label:"Déplacements/Essence", montant:227 },
-  ]
+  ],
+  // Hypothèses mensuelles : clé "YYYY-MM" -> {clientsJour, ticketMoyen, joursTravailles}
+  hypotheses_mensuelles: {},
+  // ── Bilan & Trésorerie ──
+  tresorerie_depart: 2500,
+  immobilisations: [
+    { label:"Food truck / Matériel", valeur:0, amortissement_annuel:0 },
+  ],
+  dettes: [
+    // { label:"Emprunt matériel", montant:0, mensualite:0 }
+  ],
 };
+
+// Récupère l'hypothèse du mois (clé YYYY-MM), avec valeurs par défaut si absente
+function getHypotheseMois(params, moisKey){
+  const h = (params.hypotheses_mensuelles && params.hypotheses_mensuelles[moisKey]) || {};
+  const [y,m] = moisKey.split("-").map(Number);
+  const joursTotalDefaut = new Date(y, m, 0).getDate();
+  return {
+    clientsJour: h.clientsJour || 0,
+    ticketMoyen: h.ticketMoyen || 0,
+    joursTravailles: (h.joursTravailles !== undefined && h.joursTravailles !== null) ? h.joursTravailles : joursTotalDefaut
+  };
+}
+// Nombre de jours d'ouverture estimés dans le mois (jours déjà passés depuis le 1er jusqu'à aujourd'hui, ou tout le mois si mois passé)
+function getJoursOuvertureMois(annee, mois){
+  const today = new Date();
+  const isMoisCourant = (today.getFullYear()===annee && today.getMonth()===mois);
+  const dernierJour = new Date(annee, mois+1, 0).getDate();
+  return isMoisCourant ? today.getDate() : dernierJour;
+}
+function getJoursTotalMois(annee, mois){
+  return new Date(annee, mois+1, 0).getDate();
+}
 
 const loadLocal = () => {
   try { const r = localStorage.getItem("sam_data"); return r ? JSON.parse(r) : null; } catch(e){ return null; }
@@ -196,7 +228,7 @@ export default function App() {
       if(local.cbcData?.length) setCbcData(local.cbcData);
       if(local.produitsModifiedAt) setProduitsModifiedAt(local.produitsModifiedAt);
       if(local.paramsModifiedAt) setParamsModifiedAt(local.paramsModifiedAt);
-      if(local.params) setParams(local.params);
+      if(local.params) setParams({...defaultParams, ...local.params});
       if(local.nbres) setNbres(local.nbres);
       if(local.courses?.length) setCourses(local.courses);
       if(local.journalCaisse?.length) setJournalCaisse(local.journalCaisse);
@@ -219,10 +251,10 @@ export default function App() {
         return isDefault ? remote.nbres : current;
       });
       if(remote.params && remote.paramsModifiedAt > paramsModifiedAtRef.current){
-        setParams(remote.params);
+        setParams({...defaultParams, ...remote.params});
         setParamsModifiedAt(remote.paramsModifiedAt);
       } else if(remote.params && !remote.paramsModifiedAt && !paramsModifiedAtRef.current){
-        setParams(remote.params);
+        setParams({...defaultParams, ...remote.params});
       }
       if(remote.produits?.length && remote.produitsModifiedAt > produitsModifiedAtRef.current){
         setProduits(remote.produits);
@@ -295,6 +327,8 @@ export default function App() {
     {id:"recettes", label:"Recettes", icon:"ti-clipboard-list"},
     {id:"planif", label:"Planif", icon:"ti-shopping-cart"},
     {id:"compta", label:"Compta", icon:"ti-file-invoice"},
+    {id:"bilan", label:"Bilan", icon:"ti-scale"},
+    {id:"tresorerie", label:"Trésorerie", icon:"ti-wallet"},
     {id:"cbc", label:"CBC/CBD", icon:"ti-leaf"},
     {id:"allergenes", label:"Allergènes", icon:"ti-alert-triangle"},
     {id:"params", label:"Paramètres", icon:"ti-settings"},
@@ -333,10 +367,12 @@ export default function App() {
       </div>
       <div style={{padding:"1.5rem 1rem"}}>
         {tab==="caisse" && <Caisse produits={produits} cbcData={cbcData} achatsCBC={achatsCBC} onAdd={addVente} ventes={ventes} onDelete={deleteVente} onRembourser={rembourserVente} journalCaisse={journalCaisse} addJournalEvent={addJournalEvent}/>}
-        {tab==="dashboard" && <Dashboard ventes={ventes} produits={produits}/>}
+        {tab==="dashboard" && <Dashboard ventes={ventes} produits={produits} params={params}/>}
         {tab==="recettes" && <Recettes produits={produits} setProduits={setProduitsTracked} nbres={nbres} achats={achats}/>}
         {tab==="planif" && <Planif produits={produits} nbres={nbres} setNbres={setNbres} achats={achats} setAchats={setAchats} setCourses={setCourses} ventes={ventes}/>}
         {tab==="compta" && <Compta ventes={ventes} params={params} produits={produits} courses={courses} setCourses={setCourses}/>}
+        {tab==="bilan" && <BilanPrevisionnel ventes={ventes} params={params} courses={courses}/>}
+        {tab==="tresorerie" && <PlanTresorerie ventes={ventes} params={params} courses={courses}/>}
         {tab==="cbc" && <CBC cbcData={cbcData} achatsCBC={achatsCBC} setAchatsCBC={setAchatsCBC}/>}
         {tab==="allergenes" && <Allergenes produits={produits}/>}
         {tab==="params" && <Params params={params} setParams={setParamsTracked}/>}
@@ -362,6 +398,7 @@ function Caisse({produits, cbcData, achatsCBC, onAdd, ventes, onDelete: deleteVe
   const [dateOuverture, setDateOuverture] = useState(todayStr);
   const [fondOuvertureSaisie, setFondOuvertureSaisie] = useState("");
   const [fondFermetureSaisie, setFondFermetureSaisie] = useState("");
+  const [dateHistorique, setDateHistorique] = useState(todayStr); // jour consulté dans l'historique (indépendant du jour réel de la caisse)
 
   const ouvertureToday = journalCaisse.filter(e=>e.type==="ouverture" && e.date===todayStr).slice(-1)[0]||null;
   const fermetureToday = journalCaisse.filter(e=>e.type==="fermeture" && e.date===todayStr).slice(-1)[0]||null;
@@ -405,6 +442,9 @@ function Caisse({produits, cbcData, achatsCBC, onAdd, ventes, onDelete: deleteVe
   const ventesOrdonnees = [...ventesAujourdhui].sort((a,b)=>new Date(a.date)-new Date(b.date));
   const premiereVente = ventesOrdonnees[0];
   const derniereVente = ventesOrdonnees[ventesOrdonnees.length-1];
+
+  // Historique consultable : suit dateHistorique, indépendant des KPIs caisse (toujours liés à aujourd'hui)
+  const ventesHistorique = ventes.filter(v=>!v.deleted&&v.date&&v.date.startsWith(dateHistorique));
 
   const confirmerOuverture = () => {
     const fond = parseFloat(fondOuvertureSaisie)||0;
@@ -629,12 +669,20 @@ function Caisse({produits, cbcData, achatsCBC, onAdd, ventes, onDelete: deleteVe
         </button>
       </div>
 
-      {ventesAujourdhui.length>0&&(
-        <div>
-          <div style={{fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:1,marginBottom:"0.75rem"}}>
-            Ventes du jour — {new Date().toLocaleDateString("fr-FR")}
+      <div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8,marginBottom:"0.75rem"}}>
+          <div style={{fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:1}}>
+            Historique des ventes
           </div>
-          {[...ventesAujourdhui].reverse().map(v=>(
+          <div style={{display:"flex",alignItems:"center",gap:6}}>
+            <button onClick={()=>setDateHistorique(todayStr)} style={{fontSize:11,padding:"3px 9px",border:"0.5px solid "+(dateHistorique===todayStr?"var(--color-border-primary)":"var(--color-border-tertiary)"),borderRadius:"var(--border-radius-md)",background:dateHistorique===todayStr?"var(--color-background-secondary)":"none",cursor:"pointer",color:"var(--color-text-secondary)"}}>Aujourd'hui</button>
+            <input type="date" value={dateHistorique} max={todayStr}
+              onChange={e=>setDateHistorique(e.target.value)}
+              style={{padding:"4px 8px",border:"0.5px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",background:"var(--color-background-primary)",color:"var(--color-text-primary)",fontSize:12}}/>
+          </div>
+        </div>
+        {ventesHistorique.length>0 ? (
+          [...ventesHistorique].reverse().map(v=>(
             <div key={v.id} style={{padding:"10px 12px",marginBottom:8,borderRadius:"var(--border-radius-md)",border:"0.5px solid var(--color-border-tertiary)",background:v.rembourse?"var(--color-background-secondary)":"var(--color-background-primary)",opacity:v.rembourse?0.6:1}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6}}>
                 <div style={{flex:1}}>
@@ -661,9 +709,13 @@ function Caisse({produits, cbcData, achatsCBC, onAdd, ventes, onDelete: deleteVe
                 <button onClick={()=>{if(window.confirm("Supprimer ?")) deleteVente(v.id);}} style={btnSt("danger")}>Suppr.</button>
               </div>
             </div>
-          ))}
-        </div>
-      )}
+          ))
+        ) : (
+          <div style={{textAlign:"center",padding:"2rem",color:"var(--color-text-secondary)",fontSize:13}}>
+            Aucune vente ce jour-là.
+          </div>
+        )}
+      </div>
 
       {editVente&&(
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",zIndex:100,display:"flex",alignItems:"center",justifyContent:"center",padding:"1rem"}} onClick={()=>setEditVente(null)}>
@@ -764,23 +816,82 @@ function Caisse({produits, cbcData, achatsCBC, onAdd, ventes, onDelete: deleteVe
 }
 
 
-function Dashboard({ventes, produits}){
-  const now = new Date();
-  const moisActuel = now.getMonth();
-  const anneeActuelle = now.getFullYear();
+// ══ Sélecteur de plage de dates réutilisable ══
+// Défaut : aujourd'hui. Présets rapides + sélection manuelle de plage.
+function DateRangePicker({range, setRange}){
+  const todayStr = new Date().toISOString().slice(0,10);
+  const fmtLocal = (d) => d.toISOString().slice(0,10);
 
-  const ventesMois = ventes.filter(v=>{
+  const applyPreset = (preset) => {
+    const today = new Date();
+    let from, to;
+    if(preset==="today"){ from = to = todayStr; }
+    else if(preset==="week"){
+      const day = today.getDay() || 7;
+      const monday = new Date(today); monday.setDate(today.getDate()-day+1);
+      from = fmtLocal(monday); to = todayStr;
+    } else if(preset==="month"){
+      from = fmtLocal(new Date(today.getFullYear(), today.getMonth(), 1));
+      to = todayStr;
+    } else if(preset==="year"){
+      from = fmtLocal(new Date(today.getFullYear(), 0, 1));
+      to = todayStr;
+    }
+    setRange({from, to, preset});
+  };
+
+  const presets = [
+    {id:"today", label:"Aujourd'hui"},
+    {id:"week", label:"Cette semaine"},
+    {id:"month", label:"Ce mois"},
+    {id:"year", label:"Cette année"},
+  ];
+
+  return (
+    <div style={{marginBottom:"1.5rem"}}>
+      <div style={{display:"flex",gap:6,marginBottom:8,flexWrap:"wrap"}}>
+        {presets.map(p=>(
+          <button key={p.id} onClick={()=>applyPreset(p.id)} style={{
+            padding:"5px 12px",border:"0.5px solid "+(range.preset===p.id?"var(--color-border-primary)":"var(--color-border-tertiary)"),
+            borderRadius:"var(--border-radius-md)",background:range.preset===p.id?"var(--color-background-secondary)":"none",
+            cursor:"pointer",fontSize:13,color:"var(--color-text-primary)",fontWeight:range.preset===p.id?500:400
+          }}>{p.label}</button>
+        ))}
+      </div>
+      <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+        <label style={{fontSize:12,color:"var(--color-text-secondary)"}}>Du</label>
+        <input type="date" value={range.from} max={range.to}
+          onChange={e=>setRange({from:e.target.value, to:range.to, preset:null})}
+          style={{padding:"5px 8px",border:"0.5px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",background:"var(--color-background-primary)",color:"var(--color-text-primary)",fontSize:13}}/>
+        <label style={{fontSize:12,color:"var(--color-text-secondary)"}}>au</label>
+        <input type="date" value={range.to} min={range.from} max={todayStr}
+          onChange={e=>setRange({from:range.from, to:e.target.value, preset:null})}
+          style={{padding:"5px 8px",border:"0.5px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",background:"var(--color-background-primary)",color:"var(--color-text-primary)",fontSize:13}}/>
+      </div>
+    </div>
+  );
+}
+
+function useDefaultDateRange(){
+  const todayStr = new Date().toISOString().slice(0,10);
+  return useState({from:todayStr, to:todayStr, preset:"today"});
+}
+
+function Dashboard({ventes, produits, params}){
+  const [range, setRange] = useDefaultDateRange();
+
+  const ventesPeriode = ventes.filter(v=>{
     if(!v.date || v.deleted) return false;
-    const d = new Date(v.date);
-    return d.getMonth()===moisActuel && d.getFullYear()===anneeActuelle;
+    const d = v.date.slice(0,10);
+    return d >= range.from && d <= range.to;
   });
 
-  const caTotal = ventesMois.reduce((s,v)=>s+v.total,0);
-  const nbVentes = ventesMois.length;
+  const caTotal = ventesPeriode.reduce((s,v)=>s+v.total,0);
+  const nbVentes = ventesPeriode.length;
   const ticketMoyen = nbVentes ? caTotal/nbVentes : 0;
 
   const ventesParProduit = {};
-  ventesMois.forEach(v=>v.items?.forEach(it=>{
+  ventesPeriode.forEach(v=>v.items?.forEach(it=>{
     if(!ventesParProduit[it.produit]) ventesParProduit[it.produit]={qte:0,ca:0};
     const p = produits.find(x=>x.id===it.produit);
     ventesParProduit[it.produit].qte += it.qte;
@@ -794,24 +905,74 @@ function Dashboard({ventes, produits}){
   const maxQte = topProduits[0]?.qte||1;
 
   const venteParJour = {};
-  ventesMois.forEach(v=>{
+  ventesPeriode.forEach(v=>{
     const d = v.date?.slice(0,10);
     if(d){ venteParJour[d]=(venteParJour[d]||0)+v.total; }
   });
 
-  const cbParMois = ventesMois.filter(v=>v.paiement==="CB").reduce((s,v)=>s+v.total,0);
-  const espParMois = ventesMois.filter(v=>v.paiement==="Espèce").reduce((s,v)=>s+v.total,0);
+  const cbPeriode = ventesPeriode.filter(v=>v.paiement==="CB").reduce((s,v)=>s+v.total,0);
+  const espPeriode = ventesPeriode.filter(v=>v.paiement==="Espèce").reduce((s,v)=>s+v.total,0);
+
+  const periodeLabel = range.from===range.to
+    ? new Date(range.from).toLocaleDateString("fr-FR",{day:"numeric",month:"long"})
+    : `${new Date(range.from).toLocaleDateString("fr-FR",{day:"numeric",month:"short"})} → ${new Date(range.to).toLocaleDateString("fr-FR",{day:"numeric",month:"short"})}`;
 
   const kpis = [
-    {label:`CA ${MOIS_LABELS[moisActuel]}`, val:fmtE(caTotal)},
+    {label:`CA — ${periodeLabel}`, val:fmtE(caTotal)},
     {label:"Nb ventes", val:nbVentes},
     {label:"Ticket moyen", val:nbVentes?fmtE(ticketMoyen):"—"},
-    {label:"CB", val:fmtE(cbParMois)},
-    {label:"Espèce", val:fmtE(espParMois)},
+    {label:"CB", val:fmtE(cbPeriode)},
+    {label:"Espèce", val:fmtE(espPeriode)},
   ];
+
+  // ── Hypothèse vs Réel : on compte 1 jour pour chaque jour de la plage qui a une hypothèse définie pour son mois ──
+  const hypotheseComparaison = (()=>{
+    if(!params?.hypotheses_mensuelles) return null;
+    const from = new Date(range.from), to = new Date(range.to);
+    // Pour chaque mois couvert par la plage, on prend l'hypothèse du mois et on la proratise
+    // au nombre de jours de la plage qui tombent dans ce mois, par rapport au total de jours du mois.
+    const moisVus = new Set();
+    let caAttendu = 0, clientsAttendus = 0, ticketSum = 0, ticketCount = 0, joursAvecHypothese = 0;
+    for(let d = new Date(from); d <= to; d.setDate(d.getDate()+1)){
+      const moisKey = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
+      moisVus.add(moisKey);
+    }
+    moisVus.forEach(moisKey=>{
+      const hyp = getHypotheseMois(params, moisKey);
+      if(hyp.clientsJour<=0 || hyp.ticketMoyen<=0) return;
+      const [y,m] = moisKey.split("-").map(Number);
+      const joursTotalMois = new Date(y, m, 0).getDate();
+      const debutMois = new Date(y, m-1, 1), finMois = new Date(y, m-1, joursTotalMois);
+      const debutChevauchement = debutMois > from ? debutMois : from;
+      const finChevauchement = finMois < to ? finMois : to;
+      const joursChevauchement = Math.round((finChevauchement - debutChevauchement)/86400000) + 1;
+      if(joursChevauchement<=0) return;
+      // Proportion de jours travaillés dans la portion couverte du mois
+      const ratioTravailles = hyp.joursTravailles / joursTotalMois;
+      const joursTravaillesDansPlage = joursChevauchement * ratioTravailles;
+      caAttendu += hyp.clientsJour * hyp.ticketMoyen * joursTravaillesDansPlage;
+      clientsAttendus += hyp.clientsJour * joursTravaillesDansPlage;
+      ticketSum += hyp.ticketMoyen; ticketCount++;
+      joursAvecHypothese += joursChevauchement;
+    });
+    if(ticketCount===0) return null;
+    const ticketMoyenAttendu = ticketSum/ticketCount;
+    return {
+      nbJoursCouverts: joursAvecHypothese,
+      clientsAttendus,
+      caAttendu,
+      ticketMoyenAttendu,
+      ecartCA: caTotal - caAttendu,
+      ecartCAPct: caAttendu>0 ? ((caTotal-caAttendu)/caAttendu*100) : null,
+      ecartClients: nbVentes - clientsAttendus,
+      ecartTicket: ticketMoyen - ticketMoyenAttendu,
+    };
+  })();
 
   return (
     <div>
+      <DateRangePicker range={range} setRange={setRange}/>
+
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",gap:10,marginBottom:"2rem"}}>
         {kpis.map(k=>(
           <div key={k.label} style={{background:"var(--color-background-secondary)",borderRadius:"var(--border-radius-md)",padding:"0.75rem 1rem"}}>
@@ -821,9 +982,37 @@ function Dashboard({ventes, produits}){
         ))}
       </div>
 
+      {hypotheseComparaison && (
+        <div style={{marginBottom:"2rem"}}>
+          <div style={{fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:1,marginBottom:"0.75rem"}}>
+            Hypothèse vs Réel — {periodeLabel}
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:10}}>
+            {[
+              {label:"CA attendu", val:fmtE(hypotheseComparaison.caAttendu), ecart:hypotheseComparaison.ecartCA, ecartLabel:fmtE(hypotheseComparaison.ecartCA)},
+              {label:"Clients attendus", val:Math.round(hypotheseComparaison.clientsAttendus), ecart:hypotheseComparaison.ecartClients, ecartLabel:(hypotheseComparaison.ecartClients>=0?"+":"")+hypotheseComparaison.ecartClients},
+              {label:"Ticket moyen attendu", val:fmtE(hypotheseComparaison.ticketMoyenAttendu), ecart:hypotheseComparaison.ecartTicket, ecartLabel:fmtE(hypotheseComparaison.ecartTicket)},
+            ].map(k=>(
+              <div key={k.label} style={{background:"var(--color-background-secondary)",borderRadius:"var(--border-radius-md)",padding:"0.75rem 1rem"}}>
+                <div style={{fontSize:11,color:"var(--color-text-secondary)",marginBottom:4}}>{k.label}</div>
+                <div style={{fontSize:17,fontWeight:500,marginBottom:4}}>{k.val}</div>
+                <div style={{fontSize:12,fontWeight:500,color:k.ecart>=0?"var(--color-text-success)":"var(--color-text-danger)"}}>
+                  {k.ecart>=0?"▲ ":"▼ "}{k.ecartLabel} vs hypothèse
+                </div>
+              </div>
+            ))}
+          </div>
+          {hypotheseComparaison.nbJoursCouverts < (Math.round((new Date(range.to)-new Date(range.from))/86400000)+1) && (
+            <div style={{fontSize:11,color:"var(--color-text-secondary)",marginTop:6}}>
+              Hypothèse renseignée pour {hypotheseComparaison.nbJoursCouverts} jour(s) sur la période sélectionnée — complétez les mois manquants dans Paramètres pour une comparaison complète.
+            </div>
+          )}
+        </div>
+      )}
+
       {topProduits.length>0 ? (
         <>
-          <div style={{fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:1,marginBottom:"1rem"}}>Ventes par produit — {MOIS_LABELS[moisActuel]}</div>
+          <div style={{fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:1,marginBottom:"1rem"}}>Ventes par produit — {periodeLabel}</div>
           {topProduits.map(p=>{
             const prod = produits.find(x=>x.id===p.id);
             return (
@@ -852,7 +1041,7 @@ function Dashboard({ventes, produits}){
         </>
       ) : (
         <div style={{textAlign:"center",padding:"3rem",color:"var(--color-text-secondary)",fontSize:14}}>
-          Aucune vente ce mois-ci.<br/>Enregistrez vos ventes dans l'onglet Caisse.
+          Aucune vente sur cette période.<br/>Enregistrez vos ventes dans l'onglet Caisse, ou élargissez la plage de dates.
         </div>
       )}
     </div>
@@ -1443,6 +1632,30 @@ function Planif({produits, nbres, setNbres, achats, setAchats, setCourses, vente
 }
 
 
+// Calcule le résultat net comptable d'un mois donné (réutilisé par Compta, Bilan, Trésorerie)
+function calculerResultatMois(annee, mois, ventes, params, courses){
+  const ventesMois = ventes.filter(v=>{
+    if(!v.date || v.deleted) return false;
+    const d = new Date(v.date);
+    return d.getMonth()===mois && d.getFullYear()===annee;
+  });
+  const caVentes = ventesMois.reduce((s,v)=>s+v.total,0);
+  const coursesMois = courses.filter(c=>c.mois===mois);
+  const totalCourses = coursesMois.reduce((s,c)=>s+parseFloat(c.montant||0),0);
+  const totalChargesFixes = params.charges_fixes.reduce((s,c)=>s+c.montant,0);
+  const totalChargesVarFixes = params.charges_variables_fixes.reduce((s,c)=>s+c.montant,0);
+  const totalMensualitesDettes = (params.dettes||[]).reduce((s,d)=>s+(d.mensualite||0),0);
+  const charges_sociales = caVentes * params.taux_cotisation_acre;
+  const cfp = caVentes * params.taux_cfp;
+  const ir = caVentes * params.taux_ir;
+  const totalCharges = totalCourses + totalChargesFixes + totalChargesVarFixes + charges_sociales + cfp;
+  const resultat_net = caVentes - totalCharges;
+  const resultat_comptable = resultat_net - ir;
+  // Flux de trésorerie réel : résultat comptable - remboursement du capital des dettes (la mensualité couvre capital+intérêts, déjà approximé ici en charge totale)
+  const fluxTresorerie = resultat_comptable - totalMensualitesDettes;
+  return { caVentes, totalCourses, totalChargesFixes, totalChargesVarFixes, charges_sociales, cfp, ir, totalCharges, resultat_net, resultat_comptable, totalMensualitesDettes, fluxTresorerie };
+}
+
 function Compta({ventes, params, produits, courses, setCourses}){
   const now = new Date();
   const moisActuel = now.getMonth();
@@ -1475,6 +1688,14 @@ function Compta({ventes, params, produits, courses, setCourses}){
   const totalCharges = totalCourses + totalChargesFixes + totalChargesVarFixes + charges_sociales + cfp;
   const resultat_net = caVentes - totalCharges;
   const resultat_comptable = resultat_net - ir;
+
+  // ── CA prévisionnel du mois sélectionné, basé sur l'hypothèse saisie en Paramètres ──
+  const moisKeySelected = `${anneeActuelle}-${String(selectedMois+1).padStart(2,"0")}`;
+  const hypMois = getHypotheseMois(params, moisKeySelected);
+  const caPrevisionnel = (hypMois.clientsJour>0 && hypMois.ticketMoyen>0)
+    ? hypMois.clientsJour * hypMois.ticketMoyen * hypMois.joursTravailles
+    : null;
+  const ecartCAPrevisionnel = caPrevisionnel!==null ? caVentes - caPrevisionnel : null;
 
   const addCourse = ()=>{
     if(!newCourse.montant) return;
@@ -1554,6 +1775,12 @@ function Compta({ventes, params, produits, courses, setCourses}){
                 <td style={{padding:"6px 8px",fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:1}} colSpan={2}>Produits</td>
               </tr>
               <Row label="Ventes" val={caVentes} bold/>
+              {caPrevisionnel!==null && (
+                <>
+                  <Row label="CA prévisionnel (hypothèse)" val={caPrevisionnel} sub/>
+                  <Row label="Écart vs prévisionnel" val={ecartCAPrevisionnel} sub color={ecartCAPrevisionnel>=0?"var(--color-text-success)":"var(--color-text-danger)"}/>
+                </>
+              )}
               <tr style={{background:"var(--color-background-secondary)",marginTop:8}}>
                 <td style={{padding:"6px 8px",fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:1}} colSpan={2}>Charges</td>
               </tr>
@@ -1568,6 +1795,11 @@ function Compta({ventes, params, produits, courses, setCourses}){
               <Row label="Résultat net comptable" val={resultat_comptable} bold color={resultat_comptable>=0?"var(--color-text-success)":"var(--color-text-danger)"}/>
             </tbody>
           </table>
+          {caPrevisionnel===null && (
+            <div style={{fontSize:11,color:"var(--color-text-secondary)",marginTop:8}}>
+              Aucune hypothèse définie pour {MOIS_LABELS[selectedMois]} — renseignez-la dans Paramètres pour voir le CA prévisionnel.
+            </div>
+          )}
         </div>
 
         <div>
@@ -1621,6 +1853,229 @@ function Compta({ventes, params, produits, courses, setCourses}){
           </div>}
         </div>
       </div>
+    </div>
+  );
+}
+
+function BilanPrevisionnel({ventes, params, courses}){
+  const todayForBilan = new Date();
+  const [moisBilan, setMoisBilan] = useState(
+    `${todayForBilan.getFullYear()}-${String(todayForBilan.getMonth()+1).padStart(2,"0")}`
+  );
+  const [anneeStr, moisStr] = moisBilan.split("-");
+  const anneeSel = parseInt(anneeStr), moisSel = parseInt(moisStr)-1;
+
+  // Trésorerie cumulée à la fin du mois sélectionné = trésorerie de départ + somme des flux de tous les mois depuis le début de l'historique jusqu'au mois sélectionné inclus
+  const premiereVenteDate = ventes.filter(v=>v.date && !v.deleted).map(v=>new Date(v.date)).sort((a,b)=>a-b)[0];
+  const anneeDebut = premiereVenteDate ? premiereVenteDate.getFullYear() : anneeSel;
+  const moisDebut = premiereVenteDate ? premiereVenteDate.getMonth() : moisSel;
+
+  let tresorerieCumulee = params.tresorerie_depart || 0;
+  let resultatCumule = 0;
+  let y = anneeDebut, m = moisDebut;
+  while (y < anneeSel || (y===anneeSel && m<=moisSel)) {
+    const r = calculerResultatMois(y, m, ventes, params, courses);
+    tresorerieCumulee += r.fluxTresorerie;
+    resultatCumule += r.resultat_comptable;
+    m++; if(m>11){ m=0; y++; }
+  }
+
+  const totalImmobilisationsBrut = (params.immobilisations||[]).reduce((s,im)=>s+(im.valeur||0),0);
+  // Amortissement cumulé approximatif : amortissement annuel × nombre de mois écoulés / 12, plafonné à la valeur d'origine
+  const moisEcoules = (anneeSel - anneeDebut)*12 + (moisSel - moisDebut) + 1;
+  const amortissementCumule = (params.immobilisations||[]).reduce((s,im)=>{
+    const amortMensuel = (im.amortissement_annuel||0)/12;
+    return s + Math.min(amortMensuel * moisEcoules, im.valeur||0);
+  }, 0);
+  const valeurNetteImmobilisations = totalImmobilisationsBrut - amortissementCumule;
+
+  const totalDettes = (params.dettes||[]).reduce((s,d)=>s+(d.montant||0),0);
+
+  const totalActif = tresorerieCumulee + valeurNetteImmobilisations;
+  const totalPassif = totalDettes + resultatCumule + (params.tresorerie_depart||0) - (params.tresorerie_depart||0); // capitaux propres = résultat cumulé (simplifié, capital initial neutre)
+  const capitauxPropres = resultatCumule; // simplification : pas de capital social distinct saisi
+  const totalPassifAffiche = totalDettes + capitauxPropres;
+  const equilibre = Math.abs(totalActif - totalPassifAffiche) < 1;
+
+  const Row = ({label, val, sub=false, bold=false, color=null})=>(
+    <tr style={{borderBottom:"0.5px solid var(--color-border-tertiary)"}}>
+      <td style={{padding:"6px 8px",fontSize:sub?12:13,paddingLeft:sub?24:8,color:sub?"var(--color-text-secondary)":"var(--color-text-primary)",fontWeight:bold?500:400}}>{label}</td>
+      <td style={{textAlign:"right",padding:"6px 8px",fontSize:13,fontWeight:bold?500:400,color:color||"var(--color-text-primary)"}}>{fmtE(val)}</td>
+    </tr>
+  );
+
+  return (
+    <div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"1.5rem",flexWrap:"wrap",gap:8}}>
+        <div style={{fontSize:13,color:"var(--color-text-secondary)"}}>
+          Bilan simplifié arrêté à la fin du mois sélectionné — à but de pilotage, ne remplace pas un bilan comptable officiel.
+        </div>
+        <input type="month" value={moisBilan} onChange={e=>setMoisBilan(e.target.value)}
+          style={{padding:"5px 10px",border:"0.5px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",background:"var(--color-background-primary)",color:"var(--color-text-primary)",fontSize:13}}/>
+      </div>
+
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"1.5rem"}}>
+        <div>
+          <div style={{fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:1,marginBottom:"0.75rem"}}>Actif</div>
+          <table style={{width:"100%",borderCollapse:"collapse"}}>
+            <tbody>
+              <tr style={{background:"var(--color-background-secondary)"}}>
+                <td style={{padding:"6px 8px",fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:1}} colSpan={2}>Actif circulant</td>
+              </tr>
+              <Row label="Trésorerie (banque)" val={tresorerieCumulee} sub/>
+              <tr style={{background:"var(--color-background-secondary)"}}>
+                <td style={{padding:"6px 8px",fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:1}} colSpan={2}>Actif immobilisé</td>
+              </tr>
+              {(params.immobilisations||[]).map((im,i)=>{
+                const amortMensuel = (im.amortissement_annuel||0)/12;
+                const amortCumuleItem = Math.min(amortMensuel * moisEcoules, im.valeur||0);
+                return <Row key={i} label={`${im.label} (net)`} val={(im.valeur||0)-amortCumuleItem} sub/>;
+              })}
+              {(params.immobilisations||[]).length===0 && <Row label="Aucune immobilisation" val={0} sub/>}
+              <Row label="Total actif" val={totalActif} bold/>
+            </tbody>
+          </table>
+        </div>
+
+        <div>
+          <div style={{fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:1,marginBottom:"0.75rem"}}>Passif</div>
+          <table style={{width:"100%",borderCollapse:"collapse"}}>
+            <tbody>
+              <tr style={{background:"var(--color-background-secondary)"}}>
+                <td style={{padding:"6px 8px",fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:1}} colSpan={2}>Capitaux propres</td>
+              </tr>
+              <Row label="Résultat cumulé" val={capitauxPropres} sub color={capitauxPropres>=0?"var(--color-text-success)":"var(--color-text-danger)"}/>
+              <tr style={{background:"var(--color-background-secondary)"}}>
+                <td style={{padding:"6px 8px",fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:1}} colSpan={2}>Dettes</td>
+              </tr>
+              {(params.dettes||[]).map((d,i)=>(
+                <Row key={i} label={d.label} val={d.montant||0} sub/>
+              ))}
+              {(params.dettes||[]).length===0 && <Row label="Aucune dette" val={0} sub/>}
+              <Row label="Total passif" val={totalPassifAffiche} bold/>
+            </tbody>
+          </table>
+          <div style={{marginTop:10,padding:"8px 12px",borderRadius:"var(--border-radius-md)",fontSize:12,
+            background: equilibre ? "rgba(46,125,50,0.07)" : "rgba(220,53,69,0.07)",
+            color: equilibre ? "#2e7d32" : "#dc3545"}}>
+            {equilibre ? "✓ Bilan équilibré (Actif = Passif)" : `⚠ Écart actif/passif : ${fmtE(totalActif-totalPassifAffiche)} — vérifier les saisies (immobilisations/dettes).`}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PlanTresorerie({ventes, params, courses}){
+  const todayForTreso = new Date();
+  const [moisDepart, setMoisDepart] = useState(
+    `${todayForTreso.getFullYear()}-${String(todayForTreso.getMonth()+1).padStart(2,"0")}`
+  );
+  const [nbMoisProjection, setNbMoisProjection] = useState(6);
+
+  const [anneeStr, moisStr] = moisDepart.split("-");
+  const anneeD = parseInt(anneeStr), moisD = parseInt(moisStr)-1;
+
+  // Pour chaque mois de la projection : si le mois a déjà des ventes réelles, on utilise le réel ; sinon on utilise l'hypothèse définie en Paramètres
+  const lignes = [];
+  let soldeCumule = params.tresorerie_depart || 0;
+  // D'abord, cumuler la trésorerie réelle depuis le début de l'historique jusqu'au mois juste avant moisDepart
+  const premiereVenteDate = ventes.filter(v=>v.date && !v.deleted).map(v=>new Date(v.date)).sort((a,b)=>a-b)[0];
+  if(premiereVenteDate){
+    let y = premiereVenteDate.getFullYear(), m = premiereVenteDate.getMonth();
+    while (y < anneeD || (y===anneeD && m<moisD)) {
+      const r = calculerResultatMois(y, m, ventes, params, courses);
+      soldeCumule += r.fluxTresorerie;
+      m++; if(m>11){ m=0; y++; }
+    }
+  }
+
+  let y = anneeD, m = moisD;
+  const today = new Date();
+  for(let i=0; i<nbMoisProjection; i++){
+    const moisKey = `${y}-${String(m+1).padStart(2,"0")}`;
+    const estMoisPasse = (y < today.getFullYear()) || (y===today.getFullYear() && m<today.getMonth());
+    const estMoisCourant = (y===today.getFullYear() && m===today.getMonth());
+    let caLigne, source;
+    if(estMoisPasse || estMoisCourant){
+      const r = calculerResultatMois(y, m, ventes, params, courses);
+      caLigne = r;
+      source = estMoisCourant ? "Réel (partiel)" : "Réel";
+    } else {
+      const hyp = getHypotheseMois(params, moisKey);
+      const caHyp = hyp.clientsJour * hyp.ticketMoyen * hyp.joursTravailles;
+      // On simule le résultat avec le même calcul que calculerResultatMois mais en injectant le CA hypothétique
+      const totalChargesFixes = params.charges_fixes.reduce((s,c)=>s+c.montant,0);
+      const totalChargesVarFixes = params.charges_variables_fixes.reduce((s,c)=>s+c.montant,0);
+      const totalMensualitesDettes = (params.dettes||[]).reduce((s,d)=>s+(d.mensualite||0),0);
+      const coursesMois = courses.filter(c=>c.mois===m);
+      const totalCourses = coursesMois.reduce((s,c)=>s+parseFloat(c.montant||0),0);
+      const charges_sociales = caHyp * params.taux_cotisation_acre;
+      const cfp = caHyp * params.taux_cfp;
+      const ir = caHyp * params.taux_ir;
+      const totalCharges = totalCourses + totalChargesFixes + totalChargesVarFixes + charges_sociales + cfp;
+      const resultat_net = caHyp - totalCharges;
+      const resultat_comptable = resultat_net - ir;
+      const fluxTresorerie = resultat_comptable - totalMensualitesDettes;
+      caLigne = { caVentes:caHyp, totalCharges, resultat_comptable, fluxTresorerie };
+      source = (hyp.clientsJour>0 && hyp.ticketMoyen>0) ? "Hypothèse" : "Aucune hypothèse";
+    }
+    soldeCumule += caLigne.fluxTresorerie;
+    lignes.push({ moisKey, label: `${MOIS_LABELS[m]} ${y}`, source, ...caLigne, soldeApres: soldeCumule });
+    m++; if(m>11){ m=0; y++; }
+  }
+
+  return (
+    <div>
+      <div style={{display:"flex",gap:12,marginBottom:"1.5rem",flexWrap:"wrap",alignItems:"center"}}>
+        <div>
+          <label style={{display:"block",fontSize:12,color:"var(--color-text-secondary)",marginBottom:4}}>Mois de départ</label>
+          <input type="month" value={moisDepart} onChange={e=>setMoisDepart(e.target.value)}
+            style={{padding:"5px 10px",border:"0.5px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",background:"var(--color-background-primary)",color:"var(--color-text-primary)",fontSize:13}}/>
+        </div>
+        <div>
+          <label style={{display:"block",fontSize:12,color:"var(--color-text-secondary)",marginBottom:4}}>Nombre de mois</label>
+          <select value={nbMoisProjection} onChange={e=>setNbMoisProjection(parseInt(e.target.value))}
+            style={{padding:"5px 10px",border:"0.5px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",background:"var(--color-background-primary)",color:"var(--color-text-primary)",fontSize:13}}>
+            {[3,6,12].map(n=><option key={n} value={n}>{n} mois</option>)}
+          </select>
+        </div>
+      </div>
+
+      <div style={{fontSize:12,color:"var(--color-text-secondary)",marginBottom:"1rem"}}>
+        Les mois passés/en cours utilisent le réel. Les mois futurs utilisent l'hypothèse définie en Paramètres (clients/jour × ticket moyen × jours travaillés).
+      </div>
+
+      <div style={{overflowX:"auto"}}>
+        <table style={{width:"100%",fontSize:13,borderCollapse:"collapse",minWidth:560}}>
+          <thead>
+            <tr style={{borderBottom:"1px solid var(--color-border-tertiary)",background:"var(--color-background-secondary)"}}>
+              {["Mois","Source","CA","Charges","Résultat","Flux trésorerie","Solde cumulé"].map(h=>(
+                <th key={h} style={{textAlign:h==="Mois"||h==="Source"?"left":"right",padding:"7px 8px",color:"var(--color-text-secondary)",fontWeight:400,fontSize:11}}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {lignes.map(l=>(
+              <tr key={l.moisKey} style={{borderBottom:"0.5px solid var(--color-border-tertiary)"}}>
+                <td style={{padding:"7px 8px",fontWeight:500}}>{l.label}</td>
+                <td style={{padding:"7px 8px",fontSize:11,color:l.source==="Réel"?"#2e7d32":l.source==="Hypothèse"?"var(--color-text-secondary)":"#dc3545"}}>{l.source}</td>
+                <td style={{textAlign:"right",padding:"7px 8px"}}>{fmtE(l.caVentes)}</td>
+                <td style={{textAlign:"right",padding:"7px 8px",color:"var(--color-text-secondary)"}}>{fmtE(l.totalCharges)}</td>
+                <td style={{textAlign:"right",padding:"7px 8px",color:l.resultat_comptable>=0?"var(--color-text-success)":"var(--color-text-danger)"}}>{fmtE(l.resultat_comptable)}</td>
+                <td style={{textAlign:"right",padding:"7px 8px"}}>{fmtE(l.fluxTresorerie)}</td>
+                <td style={{textAlign:"right",padding:"7px 8px",fontWeight:500,color:l.soldeApres>=0?"var(--color-text-primary)":"var(--color-text-danger)"}}>{fmtE(l.soldeApres)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {lignes.some(l=>l.soldeApres<0) && (
+        <div style={{marginTop:12,padding:"10px 14px",background:"rgba(220,53,69,0.07)",border:"0.5px solid rgba(220,53,69,0.3)",borderRadius:"var(--border-radius-md)",fontSize:13,color:"#dc3545"}}>
+          ⚠ Le solde de trésorerie passe en négatif sur la période projetée — anticiper un besoin de financement ou ajuster les charges/hypothèses.
+        </div>
+      )}
     </div>
   );
 }
@@ -1870,7 +2325,15 @@ function Allergenes({produits}){
   );
 }
 
-function Params({params, setParams}){
+function Params({params: paramsRaw, setParams}){
+  // Sécurise les anciens params sauvegardés qui n'ont pas encore les nouveaux champs (immobilisations, dettes, tresorerie_depart)
+  const params = {
+    ...paramsRaw,
+    tresorerie_depart: paramsRaw.tresorerie_depart ?? 2500,
+    immobilisations: paramsRaw.immobilisations || [],
+    dettes: paramsRaw.dettes || [],
+    hypotheses_mensuelles: paramsRaw.hypotheses_mensuelles || {},
+  };
   const upd = (key, val)=>setParams(prev=>({...prev,[key]:parseFloat(val)||0}));
   const updCharge = (type, i, key, val)=>{
     setParams(prev=>{
@@ -1883,6 +2346,22 @@ function Params({params, setParams}){
   const delCharge = (type, i)=>{
     if(!window.confirm("Supprimer cette charge ?")) return;
     setParams(prev=>({...prev,[type]:prev[type].filter((_,j)=>j!==i)}));
+  };
+
+  // Hypothèses mensuelles : mois sélectionné pour la saisie (défaut = mois en cours)
+  const todayForHyp = new Date();
+  const [moisHypSelected, setMoisHypSelected] = useState(
+    `${todayForHyp.getFullYear()}-${String(todayForHyp.getMonth()+1).padStart(2,"0")}`
+  );
+  const hypCourante = getHypotheseMois(params, moisHypSelected);
+  const updHypothese = (key, val) => {
+    setParams(prev => ({
+      ...prev,
+      hypotheses_mensuelles: {
+        ...prev.hypotheses_mensuelles,
+        [moisHypSelected]: { ...getHypotheseMois(prev, moisHypSelected), [key]: parseFloat(val)||0 }
+      }
+    }));
   };
 
   const [uploadingIdx, setUploadingIdx] = useState(null);
@@ -1953,6 +2432,47 @@ function Params({params, setParams}){
         </div>
       </div>
 
+      <div style={{marginBottom:"2rem"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"1rem",flexWrap:"wrap",gap:8}}>
+          <div style={{fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:1}}>Hypothèses mensuelles</div>
+          <input type="month" value={moisHypSelected} onChange={e=>setMoisHypSelected(e.target.value)}
+            style={{padding:"5px 10px",border:"0.5px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",background:"var(--color-background-primary)",color:"var(--color-text-primary)",fontSize:13}}/>
+        </div>
+        <div style={{fontSize:12,color:"var(--color-text-secondary)",marginBottom:"0.75rem"}}>
+          Sert de base au CA prévisionnel (Compta) et à la comparaison Hypothèse / Réel (Stats).
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:12}}>
+          <div>
+            <label style={{display:"block",fontSize:12,color:"var(--color-text-secondary)",marginBottom:4}}>Clients / jour (estimé)</label>
+            <input type="number" step="1" min="0" value={hypCourante.clientsJour||""}
+              onChange={e=>updHypothese("clientsJour", e.target.value)}
+              placeholder="Ex: 35"
+              style={{width:"100%",padding:"7px 10px",border:"0.5px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",background:"var(--color-background-primary)",color:"var(--color-text-primary)",fontSize:13}}/>
+          </div>
+          <div>
+            <label style={{display:"block",fontSize:12,color:"var(--color-text-secondary)",marginBottom:4}}>Ticket moyen estimé (€)</label>
+            <input type="number" step="0.1" min="0" value={hypCourante.ticketMoyen||""}
+              onChange={e=>updHypothese("ticketMoyen", e.target.value)}
+              placeholder="Ex: 8.50"
+              style={{width:"100%",padding:"7px 10px",border:"0.5px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",background:"var(--color-background-primary)",color:"var(--color-text-primary)",fontSize:13}}/>
+          </div>
+          <div>
+            <label style={{display:"block",fontSize:12,color:"var(--color-text-secondary)",marginBottom:4}}>Jours travaillés dans le mois</label>
+            <input type="number" step="1" min="0" max="31" value={hypCourante.joursTravailles}
+              onChange={e=>updHypothese("joursTravailles", e.target.value)}
+              style={{width:"100%",padding:"7px 10px",border:"0.5px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",background:"var(--color-background-primary)",color:"var(--color-text-primary)",fontSize:13}}/>
+          </div>
+        </div>
+        {hypCourante.clientsJour>0 && hypCourante.ticketMoyen>0 && (()=>{
+          const caEstime = hypCourante.clientsJour * hypCourante.ticketMoyen * hypCourante.joursTravailles;
+          return (
+            <div style={{marginTop:10,padding:"8px 12px",background:"var(--color-background-secondary)",borderRadius:"var(--border-radius-md)",fontSize:13}}>
+              CA prévisionnel du mois ({hypCourante.joursTravailles} jours travaillés) : <strong>{fmtE(caEstime)}</strong>
+            </div>
+          );
+        })()}
+      </div>
+
       {[
         {type:"charges_fixes",label:"Charges fixes mensuelles"},
         {type:"charges_variables_fixes",label:"Charges variables récurrentes"},
@@ -1992,6 +2512,78 @@ function Params({params, setParams}){
           </div>
         </div>
       ))}
+
+      <div style={{marginBottom:"2rem"}}>
+        <div style={{fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:1,marginBottom:"1rem"}}>Bilan & Trésorerie</div>
+
+        <div style={{marginBottom:"1rem"}}>
+          <label style={{display:"block",fontSize:12,color:"var(--color-text-secondary)",marginBottom:4}}>Trésorerie de départ (€)</label>
+          <input type="number" step="1" value={params.tresorerie_depart}
+            onChange={e=>upd("tresorerie_depart", e.target.value)}
+            style={{width:"100%",maxWidth:220,padding:"7px 10px",border:"0.5px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",background:"var(--color-background-primary)",color:"var(--color-text-primary)",fontSize:13}}/>
+          <div style={{fontSize:11,color:"var(--color-text-secondary)",marginTop:4}}>Solde du compte bancaire pro au point de départ — sert de base au Plan de trésorerie.</div>
+        </div>
+
+        <div style={{marginBottom:"1.5rem"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"0.5rem"}}>
+            <label style={{fontSize:12,color:"var(--color-text-secondary)"}}>Immobilisations (matériel, véhicule…)</label>
+            <button onClick={()=>setParams(prev=>({...prev,immobilisations:[...prev.immobilisations,{label:"Nouvelle immobilisation",valeur:0,amortissement_annuel:0}]}))}
+              style={{fontSize:12,padding:"4px 10px",border:"0.5px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",background:"none",cursor:"pointer",color:"var(--color-text-secondary)"}}>+ Ajouter</button>
+          </div>
+          {params.immobilisations.map((im,i)=>(
+            <div key={i} style={{display:"flex",gap:6,marginBottom:8,alignItems:"center",flexWrap:"wrap"}}>
+              <input value={im.label} placeholder="Désignation"
+                onChange={e=>setParams(prev=>{const a=[...prev.immobilisations];a[i]={...a[i],label:e.target.value};return {...prev,immobilisations:a};})}
+                style={{flex:1,minWidth:140,padding:"6px 10px",border:"0.5px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",background:"var(--color-background-primary)",color:"var(--color-text-primary)",fontSize:13}}/>
+              <div>
+                <input type="number" step="1" value={im.valeur} placeholder="Valeur"
+                  onChange={e=>setParams(prev=>{const a=[...prev.immobilisations];a[i]={...a[i],valeur:parseFloat(e.target.value)||0};return {...prev,immobilisations:a};})}
+                  style={{width:90,padding:"6px 10px",border:"0.5px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",background:"var(--color-background-primary)",color:"var(--color-text-primary)",fontSize:13,textAlign:"right"}}/>
+                <span style={{fontSize:10,color:"var(--color-text-secondary)",display:"block",textAlign:"center"}}>valeur €</span>
+              </div>
+              <div>
+                <input type="number" step="1" value={im.amortissement_annuel} placeholder="Amort./an"
+                  onChange={e=>setParams(prev=>{const a=[...prev.immobilisations];a[i]={...a[i],amortissement_annuel:parseFloat(e.target.value)||0};return {...prev,immobilisations:a};})}
+                  style={{width:90,padding:"6px 10px",border:"0.5px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",background:"var(--color-background-primary)",color:"var(--color-text-primary)",fontSize:13,textAlign:"right"}}/>
+                <span style={{fontSize:10,color:"var(--color-text-secondary)",display:"block",textAlign:"center"}}>amort. €/an</span>
+              </div>
+              <button onClick={()=>{ if(window.confirm("Supprimer ?")) setParams(prev=>({...prev,immobilisations:prev.immobilisations.filter((_,j)=>j!==i)})); }}
+                style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-secondary)",fontSize:14}}>✕</button>
+            </div>
+          ))}
+          {params.immobilisations.length===0 && <div style={{fontSize:12,color:"var(--color-text-secondary)"}}>Aucune immobilisation enregistrée.</div>}
+        </div>
+
+        <div>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"0.5rem"}}>
+            <label style={{fontSize:12,color:"var(--color-text-secondary)"}}>Dettes / emprunts en cours</label>
+            <button onClick={()=>setParams(prev=>({...prev,dettes:[...prev.dettes,{label:"Nouvel emprunt",montant:0,mensualite:0}]}))}
+              style={{fontSize:12,padding:"4px 10px",border:"0.5px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",background:"none",cursor:"pointer",color:"var(--color-text-secondary)"}}>+ Ajouter</button>
+          </div>
+          {params.dettes.map((dt,i)=>(
+            <div key={i} style={{display:"flex",gap:6,marginBottom:8,alignItems:"center",flexWrap:"wrap"}}>
+              <input value={dt.label} placeholder="Désignation"
+                onChange={e=>setParams(prev=>{const a=[...prev.dettes];a[i]={...a[i],label:e.target.value};return {...prev,dettes:a};})}
+                style={{flex:1,minWidth:140,padding:"6px 10px",border:"0.5px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",background:"var(--color-background-primary)",color:"var(--color-text-primary)",fontSize:13}}/>
+              <div>
+                <input type="number" step="1" value={dt.montant} placeholder="Capital restant"
+                  onChange={e=>setParams(prev=>{const a=[...prev.dettes];a[i]={...a[i],montant:parseFloat(e.target.value)||0};return {...prev,dettes:a};})}
+                  style={{width:100,padding:"6px 10px",border:"0.5px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",background:"var(--color-background-primary)",color:"var(--color-text-primary)",fontSize:13,textAlign:"right"}}/>
+                <span style={{fontSize:10,color:"var(--color-text-secondary)",display:"block",textAlign:"center"}}>capital restant €</span>
+              </div>
+              <div>
+                <input type="number" step="1" value={dt.mensualite} placeholder="Mensualité"
+                  onChange={e=>setParams(prev=>{const a=[...prev.dettes];a[i]={...a[i],mensualite:parseFloat(e.target.value)||0};return {...prev,dettes:a};})}
+                  style={{width:90,padding:"6px 10px",border:"0.5px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",background:"var(--color-background-primary)",color:"var(--color-text-primary)",fontSize:13,textAlign:"right"}}/>
+                <span style={{fontSize:10,color:"var(--color-text-secondary)",display:"block",textAlign:"center"}}>€/mois</span>
+              </div>
+              <button onClick={()=>{ if(window.confirm("Supprimer ?")) setParams(prev=>({...prev,dettes:prev.dettes.filter((_,j)=>j!==i)})); }}
+                style={{background:"none",border:"none",cursor:"pointer",color:"var(--color-text-secondary)",fontSize:14}}>✕</button>
+            </div>
+          ))}
+          {params.dettes.length===0 && <div style={{fontSize:12,color:"var(--color-text-secondary)"}}>Aucune dette enregistrée.</div>}
+        </div>
+      </div>
     </div>
   );
 }
