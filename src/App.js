@@ -373,7 +373,7 @@ export default function App() {
         {tab==="compta" && <Compta ventes={ventes} params={params} produits={produits} courses={courses} setCourses={setCourses}/>}
         {tab==="bilan" && <BilanPrevisionnel ventes={ventes} params={params} courses={courses}/>}
         {tab==="tresorerie" && <PlanTresorerie ventes={ventes} params={params} courses={courses}/>}
-        {tab==="cbc" && <CBC cbcData={cbcData} achatsCBC={achatsCBC} setAchatsCBC={setAchatsCBC}/>}
+        {tab==="cbc" && <CBC cbcData={cbcData} achatsCBC={achatsCBC} setAchatsCBC={setAchatsCBC} ventes={ventes}/>}
         {tab==="allergenes" && <Allergenes produits={produits}/>}
         {tab==="params" && <Params params={params} setParams={setParamsTracked}/>}
       </div>
@@ -1353,8 +1353,33 @@ function Planif({produits, nbres, setNbres, achats, setAchats, setCourses, vente
     return a ? a.prix_unitaire : null;
   };
 
+  // Quantité totale vendue de chaque produit, depuis le début (ventes réelles, hors suppressions)
+  const quantitesVenduesParProduit = {};
+  (ventes||[]).filter(v=>!v.deleted).forEach(v=>{
+    (v.items||[]).forEach(it=>{
+      quantitesVenduesParProduit[it.produit] = (quantitesVenduesParProduit[it.produit]||0) + (parseFloat(it.qte)||0);
+    });
+  });
+
+  // Consommation réelle d'un ingrédient = somme, sur tous les produits vendus, de (qté vendue / pièces par fournée) × qté ingrédient par fournée
+  const getConsommationReelle = (nomIngredient) => {
+    let total = 0;
+    produits.forEach(p=>{
+      const qteVendue = quantitesVenduesParProduit[p.id] || 0;
+      if(qteVendue<=0) return;
+      const factor = p.nbre_par_fournee>0 ? qteVendue/p.nbre_par_fournee : qteVendue;
+      const ing = p.ingredients.find(i=>i.n===nomIngredient);
+      if(ing) total += ing.q * factor;
+      if(p.feuille_brick && nomIngredient==="Feuille brick") total += qteVendue/2;
+    });
+    return total;
+  };
+
+  // Stock disponible = total acheté (cumulé depuis toujours) − total consommé (déduit des ventes réelles depuis toujours)
   const getStockAchete = (nom) => {
-    return (achats||[]).filter(x=>x.ingredient===nom && x.date===todayStr).reduce((s,x)=>s+x.qte_achetee, 0);
+    const acheteCumule = (achats||[]).filter(x=>x.ingredient===nom).reduce((s,x)=>s+x.qte_achetee, 0);
+    const consomme = getConsommationReelle(nom);
+    return acheteCumule - consomme;
   };
 
   const handleUpload = async (e) => {
@@ -1491,8 +1516,8 @@ function Planif({produits, nbres, setNbres, achats, setAchats, setCourses, vente
                 <th style={{padding:"7px 8px",width:32}}></th>
                 <th style={{textAlign:"left",padding:"7px 8px",fontWeight:500}}>Ingrédient</th>
                 <th style={{textAlign:"right",padding:"7px 8px",fontWeight:400,color:"var(--color-text-secondary)",fontSize:11}}>Besoin</th>
-                <th style={{textAlign:"right",padding:"7px 8px",fontWeight:400,color:"#2e7d32",fontSize:11}}>Acheté</th>
-                <th style={{textAlign:"right",padding:"7px 8px",fontWeight:500,fontSize:11}}>Reste</th>
+                <th style={{textAlign:"right",padding:"7px 8px",fontWeight:400,color:"#2e7d32",fontSize:11}}>Stock dispo</th>
+                <th style={{textAlign:"right",padding:"7px 8px",fontWeight:500,fontSize:11}}>À acheter</th>
                 <th style={{textAlign:"right",padding:"7px 8px",fontWeight:400,color:"var(--color-text-secondary)",fontSize:11}}>Réf.</th>
                 <th style={{textAlign:"right",padding:"7px 8px",fontWeight:400,color:"#dc3545",fontSize:11}}>Max</th>
                 <th style={{textAlign:"right",padding:"7px 8px",fontWeight:400,color:"var(--color-text-secondary)",fontSize:11}}>Dernier</th>
@@ -1522,17 +1547,17 @@ function Planif({produits, nbres, setNbres, achats, setAchats, setCourses, vente
                       <span style={{marginRight:5}}>{perim}</span>{nom}
                     </td>
                     {(()=>{
-                      const achete = getStockAchete(nom);
-                      const reste = Math.max(0, v.qte - achete);
+                      const stockDispo = getStockAchete(nom);
+                      const aAcheter = Math.max(0, v.qte - Math.max(0, stockDispo));
                       return (<>
                         <td style={{textAlign:"right",padding:"7px 8px",color:"var(--color-text-secondary)",fontSize:12}}>
                           {fmt(v.qte,2)} {v.unite}
                         </td>
-                        <td style={{textAlign:"right",padding:"7px 8px",fontSize:12,color:achete>0?"#2e7d32":"var(--color-text-secondary)",fontWeight:achete>0?500:400}}>
-                          {achete>0?fmt(achete,2)+" "+v.unite:"—"}
+                        <td style={{textAlign:"right",padding:"7px 8px",fontSize:12,color:stockDispo>0?"#2e7d32":stockDispo<0?"#dc3545":"var(--color-text-secondary)",fontWeight:stockDispo!==0?500:400}}>
+                          {fmt(stockDispo,2)+" "+v.unite}
                         </td>
-                        <td style={{textAlign:"right",padding:"7px 8px",fontSize:12,fontWeight:reste>0?500:400,color:reste===0?"#2e7d32":reste<v.qte?"#e65100":"var(--color-text-primary)"}}>
-                          {reste===0?"✓ OK":fmt(reste,2)+" "+v.unite}
+                        <td style={{textAlign:"right",padding:"7px 8px",fontSize:12,fontWeight:aAcheter>0?500:400,color:aAcheter===0?"#2e7d32":"#e65100"}}>
+                          {aAcheter===0?"✓ OK":fmt(aAcheter,2)+" "+v.unite}
                         </td>
                       </>);
                     })()}
@@ -1586,16 +1611,17 @@ function Planif({produits, nbres, setNbres, achats, setAchats, setCourses, vente
       </div>
 
       {(()=>{
-        const totalAchete = Object.keys(coursesMap).reduce((s,nom)=>{
-          return s + getStockAchete(nom)*(coursesMap[nom].pu||0);
+        const valeurStockDispo = Object.keys(coursesMap).reduce((s,nom)=>{
+          const stock = getStockAchete(nom);
+          return s + (stock>0 ? stock*(coursesMap[nom].pu||0) : 0);
         },0);
-        const restant = Object.keys(coursesMap).filter(nom=>getStockAchete(nom)<coursesMap[nom].qte).length;
-        if(totalAchete===0) return null;
+        const aCompleter = Object.keys(coursesMap).filter(nom=>Math.max(0,getStockAchete(nom)) < coursesMap[nom].qte).length;
+        if(Object.keys(coursesMap).length===0) return null;
         return (
           <div style={{background:"rgba(46,125,50,0.06)",border:"0.5px solid rgba(46,125,50,0.3)",borderRadius:"var(--border-radius-md)",padding:"10px 14px",marginBottom:"1rem",display:"flex",gap:16,flexWrap:"wrap",fontSize:13}}>
-            <span>✅ <strong>{fmtE(totalAchete)}</strong> achetés aujourd'hui</span>
-            {restant>0&&<span style={{color:"#e65100"}}>⏳ <strong>{restant}</strong> ingrédient{restant>1?"s":""} encore à compléter</span>}
-            {restant===0&&<span style={{color:"#2e7d32",fontWeight:500}}>🎉 Toutes les courses sont faites !</span>}
+            <span>📦 <strong>{fmtE(valeurStockDispo)}</strong> de stock disponible (valeur)</span>
+            {aCompleter>0&&<span style={{color:"#e65100"}}>⏳ <strong>{aCompleter}</strong> ingrédient{aCompleter>1?"s":""} à acheter pour couvrir le besoin du jour</span>}
+            {aCompleter===0&&<span style={{color:"#2e7d32",fontWeight:500}}>🎉 Stock suffisant pour le besoin du jour !</span>}
           </div>
         );
       })()}
@@ -2080,7 +2106,7 @@ function PlanTresorerie({ventes, params, courses}){
   );
 }
 
-function CBC({cbcData, achatsCBC, setAchatsCBC}){
+function CBC({cbcData, achatsCBC, setAchatsCBC, ventes}){
   const familles = [...new Set(cbcData.map(p=>p.famille))];
   const todayStr = new Date().toISOString().slice(0,10);
 
@@ -2090,8 +2116,19 @@ function CBC({cbcData, achatsCBC, setAchatsCBC}){
     return type==="achat" ? a.prix_achat : a.prix_vente;
   };
 
+  // Quantité vendue cumulée de ce produit CBC, depuis le début (ventes réelles, hors suppressions)
+  const getQuantiteVendue = (id) => {
+    return (ventes||[]).filter(v=>!v.deleted).reduce((s,v)=>{
+      const qteLigne = (v.items||[]).filter(it=>it.produit===id).reduce((s2,it)=>s2+(parseFloat(it.qte)||0),0);
+      return s + qteLigne;
+    }, 0);
+  };
+
+  // Stock disponible = quantités achetées cumulées (historisées via "Modifier") − quantités vendues cumulées en Caisse
   const getStockCumule = (id) => {
-    return (achatsCBC||[]).filter(x=>x.produit_id===id).reduce((s,x)=>s+(x.quantite||0),0);
+    const achete = (achatsCBC||[]).filter(x=>x.produit_id===id).reduce((s,x)=>s+(x.quantite||0),0);
+    const vendu = getQuantiteVendue(id);
+    return achete - vendu;
   };
 
   const [modalEdit, setModalEdit] = useState(null);
@@ -2251,8 +2288,8 @@ function CBC({cbcData, achatsCBC, setAchatsCBC}){
                 return (
                   <tr key={p.id} style={{borderBottom:"0.5px solid var(--color-border-tertiary)"}}>
                     <td style={{padding:"8px 8px",fontWeight:400}}>{p.nom}</td>
-                    <td style={{textAlign:"right",padding:"8px 8px",color:stock>0?"#2e7d32":"var(--color-text-secondary)",fontWeight:stock>0?500:400}}>
-                      {stock>0?stock:"—"}
+                    <td style={{textAlign:"right",padding:"8px 8px",color:stock>0?"#2e7d32":stock<0?"#dc3545":"var(--color-text-secondary)",fontWeight:stock!==0?500:400}}>
+                      {stock!==0?stock:"—"}
                     </td>
                     <td style={{textAlign:"right",padding:"8px 8px",color:"var(--color-text-secondary)"}}>{fmtE(prixAchatActuel)}</td>
                     <td style={{textAlign:"right",padding:"8px 8px",fontWeight:500}}>{fmtE(prixVenteActuel)}</td>
